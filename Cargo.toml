@@ -1,8 +1,11 @@
 [package]
 name = "memoir"
 description = "a library of self-describing parser combinators"
+repository = "https://github.com/cloudhead/memoir"
+documentation = "https://docs.rs/memoir"
 version = "0.1.0"
 authors = ["Alexis Sellier <self@cloudhead.io>"]
+license = "MIT"
 edition = "2018"
 
 [dependencies]
