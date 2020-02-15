@@ -40,6 +40,11 @@ pub trait Parser<'a>: Clone {
         (self, next)
     }
 
+    /// If this parser fails, try another one.
+    fn or<P: Parser<'a>>(self, other: P) -> Alternative<Self, P> {
+        Alternative(self, other)
+    }
+
     /// Overwrite this parser's description with the given string.
     /// This is useful in particular when using one of the provideed parsers,
     /// and the built-in description is not adequate.
@@ -52,6 +57,22 @@ pub trait Parser<'a>: Clone {
     /// error is not adequate.
     fn label_err(self, err: &'a str) -> LabelErr<'a, Self> {
         LabelErr(self, err)
+    }
+}
+
+/// A parser that always fails with a message. Useful to create custom
+/// error messages.
+#[derive(Clone)]
+pub struct Fail<'a>(&'a str);
+impl<'a> Parser<'a> for Fail<'a> {
+    type Output = ();
+
+    fn parse(&self, _: &'a str) -> Result<'a, Self::Output> {
+        Err(Error::new(self.0))
+    }
+
+    fn describe(&self) -> String {
+        self.0.to_owned()
     }
 }
 
@@ -228,10 +249,11 @@ where
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
         if let Ok((out, rest)) = self.0.parse(input) {
             Ok((Either::Left(out), rest))
-        } else if let Ok((out, rest)) = self.1.parse(input) {
-            Ok((Either::Right(out), rest))
         } else {
-            Err(self.describe_err())
+            match self.1.parse(input) {
+                Ok((out, rest)) => Ok((Either::Right(out), rest)),
+                Err(err) => Err(err),
+            }
         }
     }
 
@@ -509,6 +531,21 @@ pub fn word<'a>() -> impl Parser<'a> {
 #[inline]
 pub fn whitespace<'a>() -> Satisfy<'a, fn(char) -> bool> {
     satisfy(char::is_whitespace, " ")
+}
+
+/// Fail with a message.
+///
+/// ```
+/// use memoir::prelude::*;
+/// use memoir::error::Error;
+///
+/// let parser = symbol('!').or(fail("only `!` is allowed"));
+///
+/// assert_eq!(parser.parse("?").err(), Some(Error::new("only `!` is allowed")));
+/// ```
+#[inline]
+pub fn fail<'a>(msg: &'a str) -> Fail<'a> {
+    Fail(msg)
 }
 
 #[cfg(test)]
