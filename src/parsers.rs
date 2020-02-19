@@ -38,6 +38,13 @@ pub trait Parser<'a>: Clone {
     }
 
     /// Sequence this parser with the next one.
+    ///
+    /// ```
+    /// use memoir::prelude::*;
+    ///
+    /// let p = keyword("moo").then(symbol('!')).then(symbol('?'));
+    /// assert_eq!(p.describe(), "moo!?");
+    /// ```
     fn then<P: Parser<'a>>(self, next: P) -> (Self, P) {
         (self, next)
     }
@@ -45,6 +52,13 @@ pub trait Parser<'a>: Clone {
     /// Apply this parser, then try to apply the other parser.
     /// The outcome of the other parser is ignored. Only the output
     /// from htis parser is returned.
+    ///
+    /// ```
+    /// use memoir::prelude::*;
+    ///
+    /// let p = symbol('X').skip(symbol('Y')).then(symbol('Z'));
+    /// assert_eq!(p.parse("XYZ"), Ok((('X', 'Z'), "")));
+    /// ```
     fn skip<P: Parser<'a>>(self, skip: P) -> Skip<Self, P> {
         Skip(self, skip)
     }
@@ -560,6 +574,19 @@ pub fn choice<'a, P: Parser<'a>>(parsers: &[P]) -> Choice<P> {
 }
 
 /// Applies the parser any number of times.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let p = any(symbol('?'));
+///
+/// assert_eq!(p.to_string(), "[?]..");
+///
+/// assert!(p.parse("").is_ok());
+/// assert!(p.parse("?").is_ok());
+/// assert!(p.parse("???").is_ok());
+/// assert!(p.parse("??????").is_ok());
+/// ```
 #[inline]
 pub fn any<'a, P: Parser<'a>>(parser: P) -> Any<P> {
     Any(parser)
@@ -580,10 +607,23 @@ pub fn peek<'a, P: Parser<'a>>(parser: P) -> Peek<P> {
 /// Parses any character. Always succeeds.
 #[inline]
 pub fn character<'a>() -> Satisfy<'a, fn(char) -> bool> {
-    satisfy(|_: char| true, "*")
+    satisfy(|_| true, "*")
 }
 
-/// Applies the parser at least once.
+/// Applies the parser one or more times.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let p = many(symbol('!'));
+///
+/// assert_eq!(p.to_string(), "!..");
+///
+/// assert!(p.parse("!").is_ok());
+/// assert!(p.parse("!!").is_ok());
+/// assert!(p.parse("!!!").is_ok());
+/// assert!(p.parse("").is_err());
+/// ```
 #[inline]
 pub fn many<'a, P: Parser<'a>>(parser: P) -> Many<P> {
     Many(parser)
@@ -591,6 +631,16 @@ pub fn many<'a, P: Parser<'a>>(parser: P) -> Many<P> {
 
 /// Applies the parser at least once, separating subsequent applications
 /// with a separator.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let p = list(keyword("moo"), symbol('-'));
+///
+/// assert!(p.parse("moo-moo-moo").is_ok());
+/// assert!(p.parse("moo").is_ok());
+/// assert!(p.parse("foo").is_err());
+/// ```
 #[inline]
 pub fn list<'a, P: Parser<'a>>(parser: P, separator: impl Parser<'a>) -> impl Parser<'a> {
     parser.clone().then(Any(separator.then(parser)))
@@ -611,6 +661,18 @@ pub fn symbol(sym: char) -> Symbol {
 }
 
 /// Parses a string literal.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let p = keyword("set");
+///
+/// assert_eq!(p.to_string(), "set");
+///
+/// assert!(p.parse("set").is_ok());
+/// assert!(p.parse("get").is_err());
+/// assert!(p.parse("").is_err());
+/// ```
 #[inline]
 pub fn keyword(kw: &'static str) -> Keyword {
     Keyword(kw)
@@ -758,41 +820,6 @@ mod test {
     }
 
     #[test]
-    fn test_any() {
-        let p = Any(Symbol('?'));
-
-        assert_eq!(p.to_string(), "[?]..");
-
-        assert!(p.parse("").is_ok());
-        assert!(p.parse("?").is_ok());
-        assert!(p.parse("???").is_ok());
-        assert!(p.parse("??????").is_ok());
-    }
-
-    #[test]
-    fn test_keyword() {
-        let p = Keyword("set");
-
-        assert_eq!(p.to_string(), "set");
-
-        assert!(p.parse("set").is_ok());
-        assert!(p.parse("get").is_err());
-        assert!(p.parse("").is_err());
-    }
-
-    #[test]
-    fn test_many() {
-        let p = Many(Symbol('!'));
-
-        assert_eq!(p.to_string(), "!..");
-
-        assert!(p.parse("!").is_ok());
-        assert!(p.parse("!!").is_ok());
-        assert!(p.parse("!!!").is_ok());
-        assert!(p.parse("").is_err());
-    }
-
-    #[test]
     fn test_tuple1() {
         let p = (Many(Symbol('!')), Many(Symbol('?')));
 
@@ -817,13 +844,6 @@ mod test {
 
         assert!(p.parse("switch = on").is_ok());
         assert!(p.parse("switch = off").is_ok());
-    }
-
-    #[test]
-    fn test_then() {
-        let p = Keyword("set").then(Symbol(' ')).then(Symbol('!'));
-
-        assert_eq!(p.describe(), "set !");
     }
 
     #[test]
@@ -870,27 +890,11 @@ mod test {
     }
 
     #[test]
-    fn test_list() {
-        let p = list(Keyword("moo"), Symbol('-'));
-
-        assert!(p.parse("moo-moo-moo").is_ok());
-        assert!(p.parse("moo").is_ok());
-        assert!(p.parse("foo").is_err());
-    }
-
-    #[test]
     fn test_peek() {
         let p = peek(symbol('!'));
 
         assert_eq!(p.parse("!").unwrap().1, "!");
         assert!(p.parse("?").is_err());
-    }
-
-    #[test]
-    fn test_skip() {
-        let p = symbol('#').skip(whitespace()).then(symbol('!'));
-
-        assert_eq!(p.parse("# !"), Ok((('#', '!'), "")));
     }
 
     #[test]
