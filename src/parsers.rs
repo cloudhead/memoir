@@ -11,7 +11,9 @@ use crate::error::Error;
 /// either of two types of output.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Either<L, R> {
+    /// The left case.
     Left(L),
+    /// The right case.
     Right(R),
 }
 
@@ -21,7 +23,7 @@ pub type Result<'a, T> = result::Result<(T, &'a str), Error>;
 /// A self-describing parser combinator.
 pub trait Parser<'a>: Clone {
     /// The output of the parser, in case of success.
-    type Output;
+    type Output: fmt::Debug;
 
     /// Parse an input string and return a result, On success, returns an output, and any leftover
     /// input. Otherwise, returns an error.
@@ -38,6 +40,13 @@ pub trait Parser<'a>: Clone {
     /// Sequence this parser with the next one.
     fn then<P: Parser<'a>>(self, next: P) -> (Self, P) {
         (self, next)
+    }
+
+    /// Apply this parser, then try to apply the other parser.
+    /// The outcome of the other parser is ignored. Only the output
+    /// from htis parser is returned.
+    fn skip<P: Parser<'a>>(self, skip: P) -> Skip<Self, P> {
+        Skip(self, skip)
     }
 
     /// If this parser fails, try another one.
@@ -169,6 +178,36 @@ where
     }
 }
 
+/// Applies the underyling parser, but doesn't consume any input, even on success.
+#[derive(Clone)]
+pub struct Peek<P>(P);
+impl<'a, P> Parser<'a> for Peek<P>
+where
+    P: Parser<'a>,
+{
+    type Output = P::Output;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        match self.0.parse(input) {
+            Ok((out, _)) => Ok((out, input)),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl<'a, P> fmt::Display for Peek<P>
+where
+    P: Parser<'a>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(? {})", self.0.describe())
+    }
+}
+
 /// Applies the underlying parser zero or more times. Never fails.
 /// Returns the outputs as a vector.
 #[derive(Clone)]
@@ -204,6 +243,47 @@ where
     }
 }
 
+/// Applies the first parser zero or more times until the second parser succeeds.
+#[derive(Clone)]
+pub struct AnyUntil<P, Q>(P, Q);
+impl<'a, P, Q> Parser<'a> for AnyUntil<P, Q>
+where
+    P: Parser<'a>,
+    Q: Parser<'a>,
+{
+    type Output = Vec<P::Output>;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        let mut input = input;
+        let mut outs = Vec::new();
+
+        while self.1.parse(input).is_err() {
+            match self.0.parse(input) {
+                Ok((out, rest)) => {
+                    outs.push(out);
+                    input = rest;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Ok((outs, input))
+    }
+
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl<'a, P, Q> fmt::Display for AnyUntil<P, Q>
+where
+    P: Parser<'a>,
+    Q: Parser<'a>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}(?! {})", self.0.describe(), self.1.describe())
+    }
+}
+
 /// Applies the underlying parser at least once.
 /// Returns the outputs as a non-empty vector.
 #[derive(Clone)]
@@ -231,6 +311,33 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}..", self.0.describe())
+    }
+}
+
+/// Applies the first parser, then tries to apply the second parser.
+/// The outcome of the second parser is ignored. Only the output
+/// from the first parser is returned.
+#[derive(Clone)]
+pub struct Skip<P, Q>(P, Q);
+impl<'a, P, Q> Parser<'a> for Skip<P, Q>
+where
+    P: Parser<'a>,
+    Q: Parser<'a>,
+{
+    type Output = P::Output;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        match self.0.parse(input) {
+            Ok((out, rest)) => match self.1.parse(rest) {
+                Ok((_, skipped)) => Ok((out, skipped)),
+                Err(_) => Ok((out, rest)),
+            },
+            Err(err) => Err(err),
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.1.describe()
     }
 }
 
@@ -333,7 +440,7 @@ impl fmt::Display for Symbol {
     }
 }
 
-/// Tries to parse a string literal.
+/// Parse a string literal.
 #[derive(Clone)]
 pub struct Keyword(&'static str);
 impl<'a> Parser<'a> for Keyword {
@@ -356,6 +463,46 @@ impl<'a> Parser<'a> for Keyword {
 impl fmt::Display for Keyword {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+/// Negate a parser. If the underlying parser fails, this one succeeds,
+/// and vice versa.
+#[derive(Clone)]
+pub struct Not<P>(P);
+impl<'a, P> Parser<'a> for Not<P>
+where
+    P: Parser<'a>,
+{
+    type Output = char;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        match self.0.parse(input) {
+            Ok(_) => Err(Error::new(format!(
+                "expected `{}` to fail",
+                self.0.describe()
+            ))),
+            Err(_) => {
+                if let Some(c) = input.chars().next() {
+                    Ok((c, input.get(c.len_utf8()..).unwrap_or_default()))
+                } else {
+                    Err(Error::new("end of input reached"))
+                }
+            }
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl<'a, P> fmt::Display for Not<P>
+where
+    P: Parser<'a>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "!{}", self.0.describe())
     }
 }
 
@@ -416,6 +563,24 @@ pub fn choice<'a, P: Parser<'a>>(parsers: &[P]) -> Choice<P> {
 #[inline]
 pub fn any<'a, P: Parser<'a>>(parser: P) -> Any<P> {
     Any(parser)
+}
+
+/// Applies the first parser any number of times, until the second succeeds.
+#[inline]
+pub fn any_until<'a, P: Parser<'a>, Q: Parser<'a>>(parser: P, end: Q) -> AnyUntil<P, Q> {
+    AnyUntil(parser, end)
+}
+
+/// Applies the parser, but doesn't consume any input, even on success.
+#[inline]
+pub fn peek<'a, P: Parser<'a>>(parser: P) -> Peek<P> {
+    Peek(parser)
+}
+
+/// Parses any character. Always succeeds.
+#[inline]
+pub fn character<'a>() -> Satisfy<'a, fn(char) -> bool> {
+    satisfy(|_: char| true, "*")
 }
 
 /// Applies the parser at least once.
@@ -480,6 +645,8 @@ where
     open.then(between).then(close)
 }
 
+/// Call the given predicate on the next character. If it returns `true`,
+/// consume to the character.
 #[inline]
 pub fn satisfy<'a, F>(predicate: F, description: &'a str) -> Satisfy<'a, F> {
     Satisfy(predicate, description)
@@ -514,11 +681,11 @@ pub fn digit<'a>() -> Satisfy<'a, fn(char) -> bool> {
 /// ```
 /// use memoir::prelude::*;
 ///
-/// assert!(word().parse("fj20_a1").is_ok());
+/// assert!(word().parse("9fAh4#~!").is_ok());
 /// ```
 #[inline]
 pub fn word<'a>() -> impl Parser<'a> {
-    many(satisfy(|c: char| c.is_alphabetic() || c == '_', "a-Z | _")).label("<word>")
+    many(satisfy(|c: char| !c.is_whitespace(), "<word>")).label("<word>")
 }
 
 /// Parses a single whitespace character.
@@ -531,6 +698,19 @@ pub fn word<'a>() -> impl Parser<'a> {
 #[inline]
 pub fn whitespace<'a>() -> Satisfy<'a, fn(char) -> bool> {
     satisfy(char::is_whitespace, " ")
+}
+
+/// Parses a single line-feed token.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let (_, leftover) = linefeed().parse("\n").unwrap();
+/// assert!(leftover.is_empty());
+/// ```
+#[inline]
+pub fn linefeed<'a>() -> impl Parser<'a> {
+    satisfy(|c| c == '\n', r"\n").or(keyword("\r\n"))
 }
 
 /// Fail with a message.
@@ -696,5 +876,43 @@ mod test {
         assert!(p.parse("moo-moo-moo").is_ok());
         assert!(p.parse("moo").is_ok());
         assert!(p.parse("foo").is_err());
+    }
+
+    #[test]
+    fn test_peek() {
+        let p = peek(symbol('!'));
+
+        assert_eq!(p.parse("!").unwrap().1, "!");
+        assert!(p.parse("?").is_err());
+    }
+
+    #[test]
+    fn test_skip() {
+        let p = symbol('#').skip(whitespace()).then(symbol('!'));
+
+        assert_eq!(p.parse("# !"), Ok((('#', '!'), "")));
+    }
+
+    #[test]
+    fn test_any_until() {
+        let p = any_until(character(), symbol('!'));
+        let (out, rest) = p.parse("Hello World!").unwrap();
+
+        assert_eq!(
+            out.into_iter().collect::<String>(),
+            String::from("Hello World"),
+        );
+        assert_eq!(rest, "!");
+    }
+
+    #[test]
+    fn test_comment() {
+        let p = symbol('#')
+            .skip(whitespace())
+            .then(any_until(character(), linefeed()));
+
+        let ((_, comment), out) = p.parse("# Greet user\n").unwrap();
+        assert_eq!(comment.into_iter().collect::<String>(), "Greet user");
+        assert_eq!(out, "\n");
     }
 }

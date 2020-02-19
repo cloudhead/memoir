@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+/// A parser error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     msg: String,
@@ -9,6 +10,7 @@ pub struct Error {
 }
 
 impl Error {
+    /// Create a new parser error from a message.
     pub fn new<S: Into<String>>(msg: S) -> Self {
         Self {
             msg: msg.into(),
@@ -16,6 +18,7 @@ impl Error {
         }
     }
 
+    /// Create a new parser error from a message, and another error.
     pub fn from<S: Into<String>>(msg: S, cause: Error) -> Self {
         Self {
             msg: msg.into(),
