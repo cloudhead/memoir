@@ -7,6 +7,3 @@ version = "0.1.0"
 authors = ["Alexis Sellier <self@cloudhead.io>"]
 license = "MIT"
 edition = "2018"
-
-[dependencies]
-nonempty = "0.2"

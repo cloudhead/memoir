@@ -1,8 +1,8 @@
 //! Core parser types. Import to construct new parsers.
 
-use nonempty::NonEmpty;
-
 use std::fmt;
+use std::iter::FromIterator;
+use std::marker::PhantomData;
 use std::result;
 
 use crate::error::Error;
@@ -50,14 +50,20 @@ pub trait Parser<'a>: Clone {
     }
 
     /// Apply this parser, then try to apply the other parser.
-    /// The outcome of the other parser is ignored. Only the output
-    /// from htis parser is returned.
+    /// Only the output from this parser is returned.
     ///
     /// ```
     /// use memoir::prelude::*;
     ///
     /// let p = symbol('X').skip(symbol('Y')).then(symbol('Z'));
+    ///
     /// assert_eq!(p.parse("XYZ"), Ok((('X', 'Z'), "")));
+    /// assert!(p.parse("XZ").is_err());
+    ///
+    /// let p = symbol('X').skip(optional(symbol('Y'))).then(symbol('Z'));
+    ///
+    /// assert_eq!(p.parse("XYZ"), Ok((('X', 'Z'), "")));
+    /// assert_eq!(p.parse("XZ"), Ok((('X', 'Z'), "")));
     /// ```
     fn skip<P: Parser<'a>>(self, skip: P) -> Skip<Self, P> {
         Skip(self, skip)
@@ -96,6 +102,25 @@ impl<'a> Parser<'a> for Fail<'a> {
 
     fn describe(&self) -> String {
         self.0.to_owned()
+    }
+}
+
+/// Turn a function into a parser.
+#[derive(Clone)]
+pub struct Function<F>(F, String);
+impl<'a, F, O> Parser<'a> for Function<F>
+where
+    O: fmt::Debug + Clone,
+    F: Fn(&'a str) -> Result<'a, O> + Clone,
+{
+    type Output = O;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        self.0(input)
+    }
+
+    fn describe(&self) -> String {
+        self.1.clone()
     }
 }
 
@@ -225,12 +250,13 @@ where
 /// Applies the underlying parser zero or more times. Never fails.
 /// Returns the outputs as a vector.
 #[derive(Clone)]
-pub struct Any<P>(P);
-impl<'a, P> Parser<'a> for Any<P>
+pub struct Any<P, O>(P, PhantomData<O>);
+impl<'a, P, O> Parser<'a> for Any<P, O>
 where
     P: Parser<'a>,
+    O: FromIterator<P::Output> + fmt::Debug + Clone,
 {
-    type Output = Vec<P::Output>;
+    type Output = O;
 
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
         let mut input = input;
@@ -240,7 +266,7 @@ where
             outs.push(out);
             input = rest;
         }
-        Ok((outs, input))
+        Ok((outs.into_iter().collect::<O>(), input))
     }
 
     fn describe(&self) -> String {
@@ -248,7 +274,7 @@ where
     }
 }
 
-impl<'a, P> fmt::Display for Any<P>
+impl<'a, P, O> fmt::Display for Any<P, O>
 where
     P: Parser<'a>,
 {
@@ -259,13 +285,14 @@ where
 
 /// Applies the first parser zero or more times until the second parser succeeds.
 #[derive(Clone)]
-pub struct AnyUntil<P, Q>(P, Q);
-impl<'a, P, Q> Parser<'a> for AnyUntil<P, Q>
+pub struct AnyUntil<P, Q, O>(P, Q, PhantomData<O>);
+impl<'a, P, Q, O> Parser<'a> for AnyUntil<P, Q, O>
 where
     P: Parser<'a>,
     Q: Parser<'a>,
+    O: FromIterator<P::Output> + fmt::Debug + Clone,
 {
-    type Output = Vec<P::Output>;
+    type Output = O;
 
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
         let mut input = input;
@@ -280,7 +307,7 @@ where
                 Err(err) => return Err(err),
             }
         }
-        Ok((outs, input))
+        Ok((outs.into_iter().collect::<O>(), input))
     }
 
     fn describe(&self) -> String {
@@ -288,7 +315,7 @@ where
     }
 }
 
-impl<'a, P, Q> fmt::Display for AnyUntil<P, Q>
+impl<'a, P, Q, O> fmt::Display for AnyUntil<P, Q, O>
 where
     P: Parser<'a>,
     Q: Parser<'a>,
@@ -301,17 +328,26 @@ where
 /// Applies the underlying parser at least once.
 /// Returns the outputs as a non-empty vector.
 #[derive(Clone)]
-pub struct Many<P>(P);
-impl<'a, P> Parser<'a> for Many<P>
+pub struct Many<P, O>(P, PhantomData<O>);
+impl<'a, P, O, Q> Parser<'a> for Many<P, O>
 where
-    P: Parser<'a>,
+    P: Parser<'a, Output = Q>,
+    Q: fmt::Debug + Clone,
+    O: FromIterator<P::Output> + fmt::Debug + Clone,
 {
-    type Output = NonEmpty<P::Output>;
+    type Output = O;
 
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        (self.0.clone(), Any(self.0.clone()))
+        self.0
+            .clone()
+            .then(any::<_, Vec<Q>>(self.0.clone()))
             .parse(input)
-            .map(|(out, rest)| (out.into(), rest))
+            .map(|((head, tail), rest)| {
+                (
+                    std::iter::once(head).chain(tail.into_iter()).collect::<O>(),
+                    rest,
+                )
+            })
     }
 
     fn describe(&self) -> String {
@@ -319,7 +355,7 @@ where
     }
 }
 
-impl<'a, P> fmt::Display for Many<P>
+impl<'a, P, O> fmt::Display for Many<P, O>
 where
     P: Parser<'a>,
 {
@@ -344,7 +380,7 @@ where
         match self.0.parse(input) {
             Ok((out, rest)) => match self.1.parse(rest) {
                 Ok((_, skipped)) => Ok((out, skipped)),
-                Err(_) => Ok((out, rest)),
+                Err(err) => Err(err),
             },
             Err(err) => Err(err),
         }
@@ -480,46 +516,6 @@ impl fmt::Display for Keyword {
     }
 }
 
-/// Negate a parser. If the underlying parser fails, this one succeeds,
-/// and vice versa.
-#[derive(Clone)]
-pub struct Not<P>(P);
-impl<'a, P> Parser<'a> for Not<P>
-where
-    P: Parser<'a>,
-{
-    type Output = char;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        match self.0.parse(input) {
-            Ok(_) => Err(Error::new(format!(
-                "expected `{}` to fail",
-                self.0.describe()
-            ))),
-            Err(_) => {
-                if let Some(c) = input.chars().next() {
-                    Ok((c, input.get(c.len_utf8()..).unwrap_or_default()))
-                } else {
-                    Err(Error::new("end of input reached"))
-                }
-            }
-        }
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<'a, P> fmt::Display for Not<P>
-where
-    P: Parser<'a>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "!{}", self.0.describe())
-    }
-}
-
 /// Applies the first parser and if it succeeds, the second.
 impl<'a, P, Q> Parser<'a> for (P, Q)
 where
@@ -581,21 +577,21 @@ pub fn choice<'a, P: Parser<'a>>(parsers: &[P]) -> Choice<P> {
 /// let p = any(symbol('?'));
 ///
 /// assert_eq!(p.to_string(), "[?]..");
+/// assert_eq!(p.parse("???"), Ok((String::from("???"), "")));
 ///
 /// assert!(p.parse("").is_ok());
 /// assert!(p.parse("?").is_ok());
-/// assert!(p.parse("???").is_ok());
 /// assert!(p.parse("??????").is_ok());
 /// ```
 #[inline]
-pub fn any<'a, P: Parser<'a>>(parser: P) -> Any<P> {
-    Any(parser)
+pub fn any<'a, P: Parser<'a>, O>(parser: P) -> Any<P, O> {
+    Any(parser, PhantomData)
 }
 
 /// Applies the first parser any number of times, until the second succeeds.
 #[inline]
-pub fn any_until<'a, P: Parser<'a>, Q: Parser<'a>>(parser: P, end: Q) -> AnyUntil<P, Q> {
-    AnyUntil(parser, end)
+pub fn any_until<'a, P: Parser<'a>, Q: Parser<'a>, O>(parser: P, end: Q) -> AnyUntil<P, Q, O> {
+    AnyUntil(parser, end, PhantomData)
 }
 
 /// Applies the parser, but doesn't consume any input, even on success.
@@ -615,7 +611,7 @@ pub fn character<'a>() -> Satisfy<'a, fn(char) -> bool> {
 /// ```
 /// use memoir::prelude::*;
 ///
-/// let p = many(symbol('!'));
+/// let p = many::<_, String>(symbol('!'));
 ///
 /// assert_eq!(p.to_string(), "!..");
 ///
@@ -625,8 +621,8 @@ pub fn character<'a>() -> Satisfy<'a, fn(char) -> bool> {
 /// assert!(p.parse("").is_err());
 /// ```
 #[inline]
-pub fn many<'a, P: Parser<'a>>(parser: P) -> Many<P> {
-    Many(parser)
+pub fn many<'a, P: Parser<'a>, O>(parser: P) -> Many<P, O> {
+    Many(parser, PhantomData)
 }
 
 /// Applies the parser at least once, separating subsequent applications
@@ -640,10 +636,43 @@ pub fn many<'a, P: Parser<'a>>(parser: P) -> Many<P> {
 /// assert!(p.parse("moo-moo-moo").is_ok());
 /// assert!(p.parse("moo").is_ok());
 /// assert!(p.parse("foo").is_err());
+///
+/// let p = list(digit(), symbol(','));
+///
+/// assert_eq!(p.parse("1,2,3"), Ok((vec!['1', '2', '3'], "")));
 /// ```
 #[inline]
-pub fn list<'a, P: Parser<'a>>(parser: P, separator: impl Parser<'a>) -> impl Parser<'a> {
-    parser.clone().then(Any(separator.then(parser)))
+pub fn list<'a, P: Parser<'a, Output = O>, Q: Parser<'a>, O>(
+    parser: P,
+    separator: Q,
+) -> impl Parser<'a, Output = Vec<O>>
+where
+    O: fmt::Debug + Clone,
+{
+    let parser_desc = parser.describe();
+    let separator_desc = separator.describe();
+
+    Function(
+        move |input| match parser.parse(input) {
+            Ok((out, input)) => {
+                let mut outs: Vec<P::Output> = vec![out];
+                let mut i = input;
+
+                while let Ok((_, input)) = separator.parse(i) {
+                    match parser.parse(input) {
+                        Ok((out, input)) => {
+                            i = input;
+                            outs.push(out);
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+                Ok((outs, i))
+            }
+            Err(err) => Err(err),
+        },
+        format!("{}[{}{}]..", parser_desc, separator_desc, parser_desc,),
+    )
 }
 
 /// Tries to apply the parser. If it fails, returns the unmodified input.
@@ -694,7 +723,7 @@ where
 /// ```
 /// use memoir::prelude::*;
 ///
-/// let parser = between(symbol('{'), symbol('}'), any(letter()));
+/// let parser = between(symbol('{'), symbol('}'), any::<_, String>(letter()));
 ///
 /// assert!(parser.parse("{acme}").is_ok());
 /// ```
@@ -747,7 +776,7 @@ pub fn digit<'a>() -> Satisfy<'a, fn(char) -> bool> {
 /// ```
 #[inline]
 pub fn word<'a>() -> impl Parser<'a> {
-    many(satisfy(|c: char| !c.is_whitespace(), "<word>")).label("<word>")
+    many::<_, String>(satisfy(|c: char| !c.is_whitespace(), "<word>")).label("<word>")
 }
 
 /// Parses a single whitespace character.
@@ -821,7 +850,10 @@ mod test {
 
     #[test]
     fn test_tuple1() {
-        let p = (Many(Symbol('!')), Many(Symbol('?')));
+        let p = (
+            many::<_, String>(symbol('!')),
+            many::<_, String>(symbol('?')),
+        );
 
         assert_eq!(p.describe(), "!..?..");
         assert!(p.parse("!!!!???").is_ok());
@@ -848,7 +880,7 @@ mod test {
 
     #[test]
     fn test_satisfy() {
-        let p = Many(Satisfy(char::is_alphabetic, "[a-Z]"));
+        let p = many::<_, String>(satisfy(char::is_alphabetic, "[a-Z]"));
 
         assert_eq!(p.describe(), "[a-Z]..");
 
@@ -900,12 +932,9 @@ mod test {
     #[test]
     fn test_any_until() {
         let p = any_until(character(), symbol('!'));
-        let (out, rest) = p.parse("Hello World!").unwrap();
+        let (out, rest): (String, _) = p.parse("Hello World!").unwrap();
 
-        assert_eq!(
-            out.into_iter().collect::<String>(),
-            String::from("Hello World"),
-        );
+        assert_eq!(out, String::from("Hello World"),);
         assert_eq!(rest, "!");
     }
 
@@ -915,8 +944,8 @@ mod test {
             .skip(whitespace())
             .then(any_until(character(), linefeed()));
 
-        let ((_, comment), out) = p.parse("# Greet user\n").unwrap();
-        assert_eq!(comment.into_iter().collect::<String>(), "Greet user");
+        let ((_, comment), out): ((_, String), _) = p.parse("# Greet user\n").unwrap();
+        assert_eq!(comment, "Greet user");
         assert_eq!(out, "\n");
     }
 }
