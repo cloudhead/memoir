@@ -366,7 +366,7 @@ impl<'a, P, O, Q> Parser<'a> for Many<P, O>
 where
     P: Parser<'a, Output = Q>,
     Q: fmt::Debug + Clone,
-    O: FromIterator<P::Output> + fmt::Debug + Clone,
+    O: FromIterator<Q> + fmt::Debug + Clone,
 {
     type Output = O;
 
@@ -964,8 +964,8 @@ mod test {
 
     #[test]
     fn test_any_until() {
-        let p = any_until(character(), symbol('!'));
-        let (out, rest): (String, _) = p.parse("Hello World!").unwrap();
+        let p = any_until::<_, _, String>(character(), symbol('!'));
+        let (out, rest) = p.parse("Hello World!").unwrap();
 
         assert_eq!(out, String::from("Hello World"),);
         assert_eq!(rest, "!");
