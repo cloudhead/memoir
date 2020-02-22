@@ -74,6 +74,19 @@ pub trait Parser<'a>: Clone {
         Alternative(self, other)
     }
 
+    /// Modify the parser output if it succeeds, with the provided function.
+    ///
+    /// ```
+    /// use memoir::prelude::*;
+    ///
+    /// let p = symbol('X').map(|out| (out, out));
+    ///
+    /// assert_eq!(p.parse("X"), Ok((('X', 'X'), "")));
+    /// ```
+    fn map<F, O>(self, f: F) -> Map<Self, F, O> {
+        Map(self, f, PhantomData)
+    }
+
     /// Overwrite this parser's description with the given string.
     /// This is useful in particular when using one of the provideed parsers,
     /// and the built-in description is not adequate.
@@ -86,6 +99,26 @@ pub trait Parser<'a>: Clone {
     /// error is not adequate.
     fn label_err(self, err: &'a str) -> LabelErr<'a, Self> {
         LabelErr(self, err)
+    }
+}
+
+/// A parser with a mapped output.
+#[derive(Clone)]
+pub struct Map<P, F, O>(P, F, PhantomData<O>);
+impl<'a, P, F, O> Parser<'a> for Map<P, F, O>
+where
+    P: Parser<'a>,
+    F: Fn(P::Output) -> O + Clone,
+    O: fmt::Debug + Clone,
+{
+    type Output = O;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        self.0.parse(input).map(|(out, rest)| (self.1(out), rest))
+    }
+
+    fn describe(&self) -> String {
+        self.0.describe()
     }
 }
 
