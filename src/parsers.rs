@@ -287,7 +287,7 @@ pub struct Any<P, O>(P, PhantomData<O>);
 impl<'a, P, O> Parser<'a> for Any<P, O>
 where
     P: Parser<'a>,
-    O: FromIterator<P::Output> + fmt::Debug + Clone,
+    O: FromIterator<P::Output> + fmt::Debug,
 {
     type Output = O;
 
@@ -323,7 +323,7 @@ impl<'a, P, Q, O> Parser<'a> for AnyUntil<P, Q, O>
 where
     P: Parser<'a>,
     Q: Parser<'a>,
-    O: FromIterator<P::Output> + fmt::Debug + Clone,
+    O: FromIterator<P::Output> + fmt::Debug,
 {
     type Output = O;
 
@@ -366,7 +366,7 @@ impl<'a, P, O, Q> Parser<'a> for Many<P, O>
 where
     P: Parser<'a, Output = Q> + Clone,
     Q: fmt::Debug + Clone,
-    O: FromIterator<Q> + fmt::Debug + Clone,
+    O: FromIterator<Q> + fmt::Debug,
 {
     type Output = O;
 
