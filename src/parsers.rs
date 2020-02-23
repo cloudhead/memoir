@@ -4,6 +4,7 @@ use std::fmt;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::result;
+use std::str::FromStr;
 
 use crate::error::Error;
 
@@ -42,7 +43,7 @@ pub trait Parser<'a>: Sized {
     /// ```
     /// use memoir::prelude::*;
     ///
-    /// let p = keyword("moo").then(symbol('!')).then(symbol('?'));
+    /// let p = string("moo").then(symbol('!')).then(symbol('?'));
     /// assert_eq!(p.describe(), "moo!?");
     /// ```
     fn then<P: Parser<'a>>(self, next: P) -> (Self, P) {
@@ -535,15 +536,19 @@ impl fmt::Display for Symbol {
 
 /// Parse a string literal.
 #[derive(Clone)]
-pub struct Keyword(&'static str);
-impl<'a> Parser<'a> for Keyword {
-    type Output = &'static str;
+pub struct Keyword<O>(&'static str, PhantomData<O>);
+impl<'a, O> Parser<'a> for Keyword<O>
+where
+    O: FromStr + fmt::Debug,
+{
+    type Output = O;
 
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
         match input.get(..self.0.len()) {
-            Some(word) if word == self.0 => {
-                Ok((self.0, input.get(word.len()..).unwrap_or_default()))
-            }
+            Some(word) if word == self.0 => match O::from_str(self.0) {
+                Ok(out) => Ok((out, input.get(word.len()..).unwrap_or_default())),
+                Err(_) => Err(Error::new("couldn't convert keyword")),
+            },
             _ => Err(self.describe_err()),
         }
     }
@@ -553,7 +558,7 @@ impl<'a> Parser<'a> for Keyword {
     }
 }
 
-impl fmt::Display for Keyword {
+impl<O> fmt::Display for Keyword<O> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
@@ -668,7 +673,7 @@ pub fn many<'a, P: Parser<'a>, O>(parser: P) -> Many<P, O> {
 /// ```
 /// use memoir::prelude::*;
 ///
-/// let p = list(keyword("moo"), symbol('-'));
+/// let p = list(string("moo"), symbol('-'));
 ///
 /// assert!(p.parse("moo-moo-moo").is_ok());
 /// assert!(p.parse("moo").is_ok());
@@ -730,17 +735,26 @@ pub fn symbol(sym: char) -> Symbol {
 /// ```
 /// use memoir::prelude::*;
 ///
-/// let p = keyword("set");
+/// let p = keyword::<String>("set");
 ///
 /// assert_eq!(p.to_string(), "set");
 ///
 /// assert!(p.parse("set").is_ok());
 /// assert!(p.parse("get").is_err());
 /// assert!(p.parse("").is_err());
+///
+/// let p = keyword::<bool>("true");
+/// assert_eq!(p.parse("true!"), Ok((true, "!")));
 /// ```
 #[inline]
-pub fn keyword(kw: &'static str) -> Keyword {
-    Keyword(kw)
+pub fn keyword<O>(kw: &'static str) -> Keyword<O> {
+    Keyword(kw, PhantomData)
+}
+
+/// Like `keyword`, but constrained to `String` outputs.
+#[inline]
+pub fn string(s: &'static str) -> Keyword<String> {
+    keyword::<String>(s)
 }
 
 /// Applies the first parser, and if it fails, applies the second one.
@@ -837,7 +851,7 @@ pub fn whitespace<'a>() -> Satisfy<'a, fn(char) -> bool> {
 /// ```
 #[inline]
 pub fn linefeed<'a>() -> impl Parser<'a> {
-    satisfy(|c| c == '\n', r"\n").or(keyword("\r\n"))
+    satisfy(|c| c == '\n', r"\n").or(string("\r\n"))
 }
 
 /// Fail with a message.
@@ -898,12 +912,12 @@ mod test {
     #[test]
     fn test_tuple2() {
         let p = (
-            Keyword("switch"),
+            string("switch"),
             (
-                Symbol(' '),
+                symbol(' '),
                 (
-                    Symbol('='),
-                    (Symbol(' '), Choice(vec![Keyword("on"), Keyword("off")])),
+                    symbol('='),
+                    (symbol(' '), choice(&[string("on"), string("off")])),
                 ),
             ),
         );
@@ -927,7 +941,7 @@ mod test {
 
     #[test]
     fn test_label_err() {
-        let p = LabelErr(Keyword("set"), "want `set`");
+        let p = LabelErr(string("set"), "want `set`");
 
         assert_eq!(p.describe(), "set");
 
@@ -937,7 +951,7 @@ mod test {
 
     #[test]
     fn test_label() {
-        let p = Label(Keyword("set"), "<set>");
+        let p = Label(string("set"), "<set>");
 
         assert_eq!(p.describe(), "<set>");
         assert!(p.parse("set").is_ok());
@@ -945,8 +959,8 @@ mod test {
 
     #[test]
     fn test_labels() {
-        let p1 = Label(LabelErr(Keyword("set"), "want `set`"), "<set>");
-        let p2 = LabelErr(Label(Keyword("set"), "<set>"), "want `set`");
+        let p1 = Label(LabelErr(string("set"), "want `set`"), "<set>");
+        let p2 = LabelErr(Label(string("set"), "<set>"), "want `set`");
 
         assert_eq!(p1.describe(), "<set>");
         assert!(p1.parse("set").is_ok());

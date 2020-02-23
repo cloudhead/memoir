@@ -9,9 +9,9 @@
 //! use memoir::prelude::*;
 //!
 //! let parser =
-//!     (keyword("set"), optional(symbol('!')))
+//!     (string("set"), optional(symbol('!')))
 //!     .then(whitespace())
-//!     .then(either(keyword("on"), keyword("off")));
+//!     .then(either(string("on"), string("off")));
 //!
 //! assert_eq!(parser.describe(), "set[!] on/off");
 //! assert!(parser.parse("set on").is_ok());
