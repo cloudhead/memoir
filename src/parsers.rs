@@ -21,7 +21,7 @@ pub enum Either<L, R> {
 pub type Result<'a, T> = result::Result<(T, &'a str), Error>;
 
 /// A self-describing parser combinator.
-pub trait Parser<'a>: Clone {
+pub trait Parser<'a>: Sized {
     /// The output of the parser, in case of success.
     type Output: fmt::Debug;
 
@@ -364,7 +364,7 @@ where
 pub struct Many<P, O>(P, PhantomData<O>);
 impl<'a, P, O, Q> Parser<'a> for Many<P, O>
 where
-    P: Parser<'a, Output = Q>,
+    P: Parser<'a, Output = Q> + Clone,
     Q: fmt::Debug + Clone,
     O: FromIterator<Q> + fmt::Debug + Clone,
 {
@@ -598,7 +598,7 @@ where
 
 /// Applies the parsers in the slice until one succeeds.
 #[inline]
-pub fn choice<'a, P: Parser<'a>>(parsers: &[P]) -> Choice<P> {
+pub fn choice<'a, P: Parser<'a> + Clone>(parsers: &[P]) -> Choice<P> {
     Choice(parsers.to_vec())
 }
 
@@ -675,11 +675,10 @@ pub fn many<'a, P: Parser<'a>, O>(parser: P) -> Many<P, O> {
 /// assert_eq!(p.parse("1,2,3"), Ok((vec!['1', '2', '3'], "")));
 /// ```
 #[inline]
-pub fn list<'a, P: Parser<'a, Output = O>, Q: Parser<'a>, O>(
-    parser: P,
-    separator: Q,
-) -> impl Parser<'a, Output = Vec<O>>
+pub fn list<'a, P, Q, O>(parser: P, separator: Q) -> impl Parser<'a, Output = Vec<O>>
 where
+    P: Parser<'a, Output = O> + Clone,
+    Q: Parser<'a> + Clone,
     O: fmt::Debug + Clone,
 {
     let parser_desc = parser.describe();
