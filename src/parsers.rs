@@ -109,8 +109,7 @@ pub struct Map<P, F, O>(P, F, PhantomData<O>);
 impl<'a, P, F, O> Parser<'a> for Map<P, F, O>
 where
     P: Parser<'a>,
-    F: Fn(P::Output) -> O + Clone,
-    O: fmt::Debug + Clone,
+    F: Fn(P::Output) -> O,
 {
     type Output = O;
 
@@ -144,8 +143,7 @@ impl<'a> Parser<'a> for Fail<'a> {
 pub struct Apply<F>(F, String);
 impl<'a, F, O> Parser<'a> for Apply<F>
 where
-    O: fmt::Debug + Clone,
-    F: Fn(&'a str) -> Result<'a, O> + Clone,
+    F: Fn(&'a str) -> Result<'a, O>,
 {
     type Output = O;
 
@@ -233,7 +231,7 @@ where
 pub struct Satisfy<'a, F>(F, &'a str);
 impl<'a, F> Parser<'a> for Satisfy<'a, F>
 where
-    F: Fn(char) -> bool + Clone,
+    F: Fn(char) -> bool,
 {
     type Output = char;
 
@@ -288,7 +286,7 @@ pub struct Any<P, O>(P, PhantomData<O>);
 impl<'a, P, O> Parser<'a> for Any<P, O>
 where
     P: Parser<'a>,
-    O: FromIterator<P::Output> + fmt::Debug,
+    O: FromIterator<P::Output>,
 {
     type Output = O;
 
@@ -334,7 +332,7 @@ impl<'a, P, Q, O> Parser<'a> for AnyUntil<P, Q, O>
 where
     P: Parser<'a>,
     Q: Parser<'a>,
-    O: FromIterator<P::Output> + fmt::Debug,
+    O: FromIterator<P::Output>,
 {
     type Output = O;
 
@@ -376,8 +374,7 @@ pub struct Many<P, O>(P, PhantomData<O>);
 impl<'a, P, O, Q> Parser<'a> for Many<P, O>
 where
     P: Parser<'a, Output = Q> + Clone,
-    Q: fmt::Debug + Clone,
-    O: FromIterator<Q> + fmt::Debug,
+    O: FromIterator<Q>,
 {
     type Output = O;
 
@@ -539,7 +536,7 @@ impl fmt::Display for Symbol {
 pub struct Keyword<O>(&'static str, PhantomData<O>);
 impl<'a, O> Parser<'a> for Keyword<O>
 where
-    O: FromStr + fmt::Debug,
+    O: FromStr,
 {
     type Output = O;
 
@@ -686,9 +683,8 @@ pub fn many<'a, P: Parser<'a>, O>(parser: P) -> Many<P, O> {
 #[inline]
 pub fn list<'a, P, Q, O>(parser: P, separator: Q) -> impl Parser<'a, Output = Vec<O>>
 where
-    P: Parser<'a, Output = O> + Clone,
-    Q: Parser<'a> + Clone,
-    O: fmt::Debug + Clone,
+    P: Parser<'a, Output = O>,
+    Q: Parser<'a>,
 {
     let parser_desc = parser.describe();
     let separator_desc = separator.describe();
