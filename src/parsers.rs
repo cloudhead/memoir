@@ -24,7 +24,7 @@ pub type Result<'a, T> = result::Result<(T, &'a str), Error>;
 /// A self-describing parser combinator.
 pub trait Parser<'a>: Sized {
     /// The output of the parser, in case of success.
-    type Output: fmt::Debug;
+    type Output;
 
     /// Parse an input string and return a result. On success, returns an output, and any leftover
     /// input. Otherwise, returns an error.
