@@ -307,6 +307,16 @@ where
     }
 }
 
+impl<'a, P, O> Any<P, O>
+where
+    P: Parser<'a>,
+{
+    /// Apply this parser until another parser succeeds.
+    pub fn until<Q: Parser<'a>>(self, other: Q) -> AnyUntil<P, Q, O> {
+        AnyUntil(self.0, other, PhantomData)
+    }
+}
+
 impl<'a, P, O> fmt::Display for Any<P, O>
 where
     P: Parser<'a>,
@@ -619,12 +629,6 @@ pub fn choice<'a, P: Parser<'a> + Clone>(parsers: &[P]) -> Choice<P> {
 #[inline]
 pub fn any<'a, P: Parser<'a>, O>(parser: P) -> Any<P, O> {
     Any(parser, PhantomData)
-}
-
-/// Applies the first parser any number of times, until the second succeeds.
-#[inline]
-pub fn any_until<'a, P: Parser<'a>, Q: Parser<'a>, O>(parser: P, end: Q) -> AnyUntil<P, Q, O> {
-    AnyUntil(parser, end, PhantomData)
 }
 
 /// Applies the parser, but doesn't consume any input, even on success.
@@ -963,7 +967,7 @@ mod test {
 
     #[test]
     fn test_any_until() {
-        let p = any_until::<_, _, String>(character(), symbol('!'));
+        let p = any::<_, String>(character()).until(symbol('!'));
         let (out, rest) = p.parse("Hello World!").unwrap();
 
         assert_eq!(out, String::from("Hello World"),);
@@ -974,7 +978,7 @@ mod test {
     fn test_comment() {
         let p = symbol('#')
             .skip(whitespace())
-            .then(any_until(character(), linefeed()));
+            .then(any(character()).until(linefeed()));
 
         let ((_, comment), out): ((_, String), _) = p.parse("# Greet user\n").unwrap();
         assert_eq!(comment, "Greet user");
