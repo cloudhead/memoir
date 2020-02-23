@@ -140,8 +140,8 @@ impl<'a> Parser<'a> for Fail<'a> {
 
 /// Turn a function into a parser.
 #[derive(Clone)]
-pub struct Function<F>(F, String);
-impl<'a, F, O> Parser<'a> for Function<F>
+pub struct Apply<F>(F, String);
+impl<'a, F, O> Parser<'a> for Apply<F>
 where
     O: fmt::Debug + Clone,
     F: Fn(&'a str) -> Result<'a, O> + Clone,
@@ -684,7 +684,7 @@ where
     let parser_desc = parser.describe();
     let separator_desc = separator.describe();
 
-    Function(
+    Apply(
         move |input| match parser.parse(input) {
             Ok((out, input)) => {
                 let mut outs: Vec<P::Output> = vec![out];
