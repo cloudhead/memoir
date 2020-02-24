@@ -22,7 +22,7 @@ pub enum Either<L, R> {
 pub type Result<'a, T> = result::Result<(T, &'a str), Error>;
 
 /// A self-describing parser combinator.
-pub trait Parser<'a>: Sized {
+pub trait Parser<'a> {
     /// The output of the parser, in case of success.
     type Output;
 
@@ -46,7 +46,10 @@ pub trait Parser<'a>: Sized {
     /// let p = string("moo").then(symbol('!')).then(symbol('?'));
     /// assert_eq!(p.describe(), "moo!?");
     /// ```
-    fn then<P: Parser<'a>>(self, next: P) -> (Self, P) {
+    fn then<P: Parser<'a>>(self, next: P) -> (Self, P)
+    where
+        Self: Sized,
+    {
         (self, next)
     }
 
@@ -66,12 +69,26 @@ pub trait Parser<'a>: Sized {
     /// assert_eq!(p.parse("XYZ"), Ok((('X', 'Z'), "")));
     /// assert_eq!(p.parse("XZ"), Ok((('X', 'Z'), "")));
     /// ```
-    fn skip<P: Parser<'a>>(self, skip: P) -> Skip<Self, P> {
+    fn skip<P: Parser<'a>>(self, skip: P) -> Skip<Self, P>
+    where
+        Self: Sized,
+    {
         Skip(self, skip)
     }
 
     /// If this parser fails, try another one.
-    fn or<P: Parser<'a>>(self, other: P) -> Alternative<Self, P> {
+    ///
+    /// ```
+    /// use memoir::prelude::*;
+    ///
+    /// let p = symbol('!').or(symbol('?'));
+    ///
+    /// assert_eq!(p.parse("?"), Ok(('?', "")));
+    /// ```
+    fn or<P: Parser<'a>>(self, other: P) -> Alternative<Self, P>
+    where
+        Self: Sized,
+    {
         Alternative(self, other)
     }
 
@@ -84,21 +101,30 @@ pub trait Parser<'a>: Sized {
     ///
     /// assert_eq!(p.parse("X"), Ok((('X', 'X'), "")));
     /// ```
-    fn map<F, O>(self, f: F) -> Map<Self, F, O> {
+    fn map<F, O>(self, f: F) -> Map<Self, F, O>
+    where
+        Self: Sized,
+    {
         Map(self, f, PhantomData)
     }
 
     /// Overwrite this parser's description with the given string.
     /// This is useful in particular when using one of the provideed parsers,
     /// and the built-in description is not adequate.
-    fn label(self, label: &'a str) -> Label<'a, Self> {
+    fn label(self, label: &'a str) -> Label<'a, Self>
+    where
+        Self: Sized,
+    {
         Label(self, label)
     }
 
     /// Provide a custom error message in case this parser fails.
     /// This is useful for more complex parsers, or when the default
     /// error is not adequate.
-    fn label_err(self, err: &'a str) -> LabelErr<'a, Self> {
+    fn label_err(self, err: &'a str) -> LabelErr<'a, Self>
+    where
+        Self: Sized,
+    {
         LabelErr(self, err)
     }
 }
@@ -125,9 +151,9 @@ where
 /// A parser that always fails with a message. Useful to create custom
 /// error messages.
 #[derive(Clone)]
-pub struct Fail<'a>(&'a str);
-impl<'a> Parser<'a> for Fail<'a> {
-    type Output = ();
+pub struct Fail<'a, O>(&'a str, PhantomData<O>);
+impl<'a, O> Parser<'a> for Fail<'a, O> {
+    type Output = O;
 
     fn parse(&self, _: &'a str) -> Result<'a, Self::Output> {
         Err(Error::new(self.0))
@@ -437,19 +463,19 @@ where
 /// the output of the first or second parser.
 #[derive(Clone)]
 pub struct Alternative<P, Q>(P, Q);
-impl<'a, P, Q> Parser<'a> for Alternative<P, Q>
+impl<'a, P, Q, O> Parser<'a> for Alternative<P, Q>
 where
-    P: Parser<'a>,
-    Q: Parser<'a>,
+    P: Parser<'a, Output = O>,
+    Q: Parser<'a, Output = O>,
 {
-    type Output = Either<P::Output, Q::Output>;
+    type Output = O;
 
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
         if let Ok((out, rest)) = self.0.parse(input) {
-            Ok((Either::Left(out), rest))
+            Ok((out, rest))
         } else {
             match self.1.parse(input) {
-                Ok((out, rest)) => Ok((Either::Right(out), rest)),
+                Ok((out, rest)) => Ok((out, rest)),
                 Err(err) => Err(err),
             }
         }
@@ -756,12 +782,26 @@ pub fn string(s: &'static str) -> Keyword<String> {
 /// Applies the first parser, and if it fails, applies the second one.
 /// Outputs an `Either` on success.
 #[inline]
-pub fn either<'a, P, Q>(left: P, right: Q) -> Alternative<P, Q>
+pub fn either<'a, P, Q>(left: P, right: Q) -> impl Parser<'a>
 where
     P: Parser<'a>,
     Q: Parser<'a>,
 {
-    Alternative(left, right)
+    let desc = format!("{}/{}", left.describe(), right.describe());
+
+    Apply(
+        move |input| {
+            if let Ok((out, rest)) = left.parse(input) {
+                Ok((Either::Left(out), rest))
+            } else {
+                match right.parse(input) {
+                    Ok((out, rest)) => Ok((Either::Right(out), rest)),
+                    Err(err) => Err(err),
+                }
+            }
+        },
+        desc,
+    )
 }
 
 /// Apply *open*, then *between*, then *close*.
@@ -846,8 +886,10 @@ pub fn whitespace<'a>() -> Satisfy<'a, fn(char) -> bool> {
 /// assert!(leftover.is_empty());
 /// ```
 #[inline]
-pub fn linefeed<'a>() -> impl Parser<'a> {
-    satisfy(|c| c == '\n', r"\n").or(string("\r\n"))
+pub fn linefeed<'a>() -> impl Parser<'a, Output = String> {
+    satisfy(|c| c == '\n', r"\n")
+        .map(|_| String::new())
+        .or(string("\r\n"))
 }
 
 /// Fail with a message.
@@ -861,8 +903,8 @@ pub fn linefeed<'a>() -> impl Parser<'a> {
 /// assert_eq!(parser.parse("?").err(), Some(Error::new("only `!` is allowed")));
 /// ```
 #[inline]
-pub fn fail<'a>(msg: &'a str) -> Fail<'a> {
-    Fail(msg)
+pub fn fail<'a, O>(msg: &'a str) -> Fail<'a, O> {
+    Fail(msg, PhantomData)
 }
 
 #[cfg(test)]
@@ -982,6 +1024,12 @@ mod test {
 
         assert_eq!(out, String::from("Hello World"),);
         assert_eq!(rest, "!");
+    }
+
+    #[test]
+    fn test_many() {
+        let p = many::<_, Vec<_>>(many::<_, String>(letter()).label("<word>"));
+        assert!(p.parse("moomoomoo").is_ok());
     }
 
     #[test]
