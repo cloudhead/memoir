@@ -34,8 +34,9 @@ pub trait Parser<'a> {
     fn describe(&self) -> String;
 
     /// Describe this parser when it fails.
-    fn describe_err(&self) -> Error {
-        Error::new(format!("expected `{}`", self.describe()))
+    fn describe_err(&self, input: &'a str) -> Error {
+        let input = if input.len() > 8 { &input[..8] } else { input };
+        Error::new(format!("expected `{}`, got `{}..`", self.describe(), input))
     }
 
     /// Sequence this parser with the next one.
@@ -266,7 +267,7 @@ where
 
         match input.chars().next() {
             Some(c) if predicate(c) => Ok((c, input.get(c.len_utf8()..).unwrap_or_default())),
-            _ => Err(self.describe_err()),
+            _ => Err(self.describe_err(input)),
         }
     }
 
@@ -511,7 +512,7 @@ where
                 return Ok(result);
             }
         }
-        Err(self.describe_err())
+        Err(self.describe_err(input))
     }
 
     fn describe(&self) -> String {
@@ -542,7 +543,7 @@ impl<'a> Parser<'a> for Symbol {
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
         match input.chars().next() {
             Some(c) if c == self.0 => Ok((c, input.get(c.len_utf8()..).unwrap_or_default())),
-            _ => Err(self.describe_err()),
+            _ => Err(self.describe_err(input)),
         }
     }
 
@@ -572,7 +573,7 @@ where
                 Ok(out) => Ok((out, input.get(word.len()..).unwrap_or_default())),
                 Err(_) => Err(Error::new("couldn't convert keyword")),
             },
-            _ => Err(self.describe_err()),
+            _ => Err(self.describe_err(input)),
         }
     }
 
@@ -974,7 +975,10 @@ mod test {
 
         assert!(p.parse("abcdefg").is_ok());
         assert!(p.parse("aBcDe").is_ok());
-        assert_eq!(p.parse("___").err(), Some(Error::new("expected `[a-Z]`")));
+        assert_eq!(
+            p.parse("1234").err(),
+            Some(Error::new("expected `[a-Z]`, got `1234..`"))
+        );
     }
 
     #[test]
