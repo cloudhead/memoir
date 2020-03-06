@@ -979,6 +979,14 @@ pub fn fail<'a, O>(msg: &'a str) -> Fail<'a, O> {
     Fail(msg, PhantomData)
 }
 
+/// Create a parser out of a function.
+pub fn apply<'a, F, O>(f: F, description: &str) -> Apply<F>
+where
+    F: Fn(&'a str) -> Result<'a, O>,
+{
+    Apply(f, description.to_owned())
+}
+
 impl<'a> Parser<'a> for char {
     type Output = Self;
 
