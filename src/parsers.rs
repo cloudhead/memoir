@@ -4,7 +4,7 @@ use std::fmt;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::result;
-use std::str::FromStr;
+use std::str;
 
 use crate::error::Error;
 
@@ -127,6 +127,51 @@ pub trait Parser<'a> {
         Self: Sized,
     {
         LabelErr(self, err)
+    }
+
+    /// Try to convert the output of the parser from a string to the specified type.
+    ///
+    /// ```
+    /// use memoir::prelude::*;
+    ///
+    /// let p = many::<_, String>(digit()).from_str::<u64>();
+    ///
+    /// assert_eq!(p.parse("12345"), Ok((12345, "")));
+    /// assert!(p.parse("abcde").is_err());
+    ///
+    /// ```
+    fn from_str<O>(self) -> FromStr<Self, O>
+    where
+        Self: Sized,
+    {
+        FromStr(self, PhantomData)
+    }
+}
+
+/// A parser that converts its output from a string.
+#[derive(Copy, Clone)]
+pub struct FromStr<P, O>(P, PhantomData<O>);
+impl<'a, P, O, S> Parser<'a> for FromStr<P, O>
+where
+    P: Parser<'a, Output = S>,
+    S: AsRef<str>,
+    O: str::FromStr,
+{
+    type Output = O;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        match self.0.parse(input) {
+            Ok((out, rest)) => match O::from_str(out.as_ref()) {
+                Ok(o) => Ok((o, rest)),
+                // TODO: Improve error message.
+                Err(_) => Err(Error::new(format!("conversion from string failed"))),
+            },
+            Err(err) => Err(err),
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.0.describe()
     }
 }
 
@@ -588,7 +633,7 @@ impl fmt::Display for Symbol {
 pub struct Keyword<O>(&'static str, PhantomData<O>);
 impl<'a, O> Parser<'a> for Keyword<O>
 where
-    O: FromStr,
+    O: str::FromStr,
 {
     type Output = O;
 
