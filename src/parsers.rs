@@ -979,6 +979,30 @@ pub fn fail<'a, O>(msg: &'a str) -> Fail<'a, O> {
     Fail(msg, PhantomData)
 }
 
+impl<'a> Parser<'a> for char {
+    type Output = Self;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        symbol(*self).parse(input)
+    }
+
+    fn describe(&self) -> String {
+        symbol(*self).describe()
+    }
+}
+
+impl<'a> Parser<'a> for &'static str {
+    type Output = String;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        string(self).parse(input)
+    }
+
+    fn describe(&self) -> String {
+        string(self).describe()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
