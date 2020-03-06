@@ -883,14 +883,15 @@ where
 /// let parser = between(symbol('{'), symbol('}'), any::<_, String>(letter()));
 ///
 /// assert!(parser.parse("{acme}").is_ok());
+/// assert_eq!(parser.parse("{acme}"), Ok(("acme".to_owned(), "")));
 /// ```
 #[inline]
-pub fn between<'a, P, Q>(open: P, close: P, between: Q) -> impl Parser<'a>
+pub fn between<'a, P, Q, O>(open: P, close: P, between: Q) -> impl Parser<'a, Output = O>
 where
     P: Parser<'a>,
-    Q: Parser<'a>,
+    Q: Parser<'a, Output = O>,
 {
-    open.then(between).then(close)
+    open.then(between).then(close).map(|((_, body), _)| body)
 }
 
 /// Call the given predicate on the next character. If it returns `true`,
