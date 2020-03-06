@@ -149,9 +149,19 @@ where
     }
 }
 
+impl<'a, P, F, O> std::fmt::Debug for Map<P, F, O>
+where
+    P: Parser<'a> + std::fmt::Debug,
+    F: Fn(P::Output) -> O,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Map({:?})", self.0)
+    }
+}
+
 /// A parser that always fails with a message. Useful to create custom
 /// error messages.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Fail<'a, O>(&'a str, PhantomData<O>);
 impl<'a, O> Parser<'a> for Fail<'a, O> {
     type Output = O;
@@ -183,9 +193,15 @@ where
     }
 }
 
+impl<F> std::fmt::Debug for Apply<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Apply({})", self.1)
+    }
+}
+
 /// A transparent parser that overwrites that provides a description
 /// for the underlying parser.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Label<'a, P>(P, &'a str);
 impl<'a, P> Parser<'a> for Label<'a, P>
 where
@@ -203,7 +219,7 @@ where
 }
 
 /// A transparent parser that just adds a label in case the parser fails.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LabelErr<'a, P>(P, &'a str);
 impl<'a, P> Parser<'a> for LabelErr<'a, P>
 where
@@ -224,7 +240,7 @@ where
 /// an unmodified input.
 ///
 /// Returns the output as an `Option`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Optional<P>(P);
 impl<'a, P> Parser<'a> for Optional<P>
 where
@@ -276,8 +292,17 @@ where
     }
 }
 
+impl<'a, F> std::fmt::Debug for Satisfy<'a, F>
+where
+    F: Fn(char) -> bool,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Satisfy({})", self.describe())
+    }
+}
+
 /// Applies the underyling parser, but doesn't consume any input, even on success.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Peek<P>(P);
 impl<'a, P> Parser<'a> for Peek<P>
 where
@@ -308,7 +333,7 @@ where
 
 /// Applies the underlying parser zero or more times. Never fails.
 /// Returns the outputs as a vector.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Any<P, O>(P, PhantomData<O>);
 impl<'a, P, O> Parser<'a> for Any<P, O>
 where
@@ -353,7 +378,7 @@ where
 }
 
 /// Applies the first parser zero or more times until the second parser succeeds.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AnyUntil<P, Q, O>(P, Q, PhantomData<O>);
 impl<'a, P, Q, O> Parser<'a> for AnyUntil<P, Q, O>
 where
@@ -396,7 +421,7 @@ where
 
 /// Applies the underlying parser at least once.
 /// Returns the outputs as a non-empty vector.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Many<P, O>(P, PhantomData<O>);
 impl<'a, P, O, Q> Parser<'a> for Many<P, O>
 where
@@ -435,7 +460,7 @@ where
 /// Applies the first parser, then tries to apply the second parser.
 /// The outcome of the second parser is ignored. Only the output
 /// from the first parser is returned.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Skip<P, Q>(P, Q);
 impl<'a, P, Q> Parser<'a> for Skip<P, Q>
 where
@@ -462,7 +487,7 @@ where
 /// Tries to apply the first parser, and if it fails, applies
 /// the second one. On success, returns an `Either` with either
 /// the output of the first or second parser.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Alternative<P, Q>(P, Q);
 impl<'a, P, Q, O> Parser<'a> for Alternative<P, Q>
 where
@@ -498,7 +523,7 @@ where
 }
 
 /// Applies the parsers in the underlying vector until one succeeds.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Choice<P>(Vec<P>);
 impl<'a, P> Parser<'a> for Choice<P>
 where
@@ -535,7 +560,7 @@ where
 }
 
 /// Tries to parse a single character.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Symbol(char);
 impl<'a> Parser<'a> for Symbol {
     type Output = char;
@@ -559,7 +584,7 @@ impl fmt::Display for Symbol {
 }
 
 /// Parse a string literal.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Keyword<O>(&'static str, PhantomData<O>);
 impl<'a, O> Parser<'a> for Keyword<O>
 where
