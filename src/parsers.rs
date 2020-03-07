@@ -706,7 +706,6 @@ where
 }
 
 /// Applies the parsers in the slice until one succeeds.
-#[inline]
 pub fn choice<'a, P: Parser<'a> + Clone>(parsers: &[P]) -> Choice<P> {
     Choice(parsers.to_vec())
 }
@@ -725,19 +724,16 @@ pub fn choice<'a, P: Parser<'a> + Clone>(parsers: &[P]) -> Choice<P> {
 /// assert!(p.parse("?").is_ok());
 /// assert!(p.parse("??????").is_ok());
 /// ```
-#[inline]
 pub fn any<'a, P: Parser<'a>, O>(parser: P) -> Any<P, O> {
     Any(parser, PhantomData)
 }
 
 /// Applies the parser, but doesn't consume any input, even on success.
-#[inline]
 pub fn peek<'a, P: Parser<'a>>(parser: P) -> Peek<P> {
     Peek(parser)
 }
 
 /// Parses any character. Always succeeds.
-#[inline]
 pub fn character<'a>() -> Satisfy<'a, fn(char) -> bool> {
     satisfy(|_| true, "*")
 }
@@ -756,7 +752,6 @@ pub fn character<'a>() -> Satisfy<'a, fn(char) -> bool> {
 /// assert!(p.parse("!!!").is_ok());
 /// assert!(p.parse("").is_err());
 /// ```
-#[inline]
 pub fn many<'a, P: Parser<'a>, O>(parser: P) -> Many<P, O> {
     Many(parser, PhantomData)
 }
@@ -777,7 +772,6 @@ pub fn many<'a, P: Parser<'a>, O>(parser: P) -> Many<P, O> {
 ///
 /// assert_eq!(p.parse("1,2,3"), Ok((vec!['1', '2', '3'], "")));
 /// ```
-#[inline]
 pub fn list<'a, P, Q, O>(parser: P, separator: Q) -> impl Parser<'a, Output = Vec<O>>
 where
     P: Parser<'a, Output = O>,
@@ -812,13 +806,11 @@ where
 /// Tries to apply the parser. If it fails, returns the unmodified input.
 /// Outputs an `Option` with `None` if it failed to apply the parser
 /// and `Some` if it succeeded.
-#[inline]
 pub fn optional<'a, P: Parser<'a>>(parser: P) -> Optional<P> {
     Optional(parser)
 }
 
 /// Parses a single character.
-#[inline]
 pub fn symbol(sym: char) -> Symbol {
     Symbol(sym)
 }
@@ -839,20 +831,17 @@ pub fn symbol(sym: char) -> Symbol {
 /// let p = keyword::<bool>("true");
 /// assert_eq!(p.parse("true!"), Ok((true, "!")));
 /// ```
-#[inline]
 pub fn keyword<O>(kw: &'static str) -> Keyword<O> {
     Keyword(kw, PhantomData)
 }
 
 /// Like `keyword`, but constrained to `String` outputs.
-#[inline]
 pub fn string(s: &'static str) -> Keyword<String> {
     keyword::<String>(s)
 }
 
 /// Applies the first parser, and if it fails, applies the second one.
 /// Outputs an `Either` on success.
-#[inline]
 pub fn either<'a, P, Q>(left: P, right: Q) -> impl Parser<'a>
 where
     P: Parser<'a>,
@@ -885,7 +874,6 @@ where
 /// assert!(parser.parse("{acme}").is_ok());
 /// assert_eq!(parser.parse("{acme}"), Ok(("acme".to_owned(), "")));
 /// ```
-#[inline]
 pub fn between<'a, P, Q, O>(open: P, close: P, between: Q) -> impl Parser<'a, Output = O>
 where
     P: Parser<'a>,
@@ -896,7 +884,6 @@ where
 
 /// Call the given predicate on the next character. If it returns `true`,
 /// consume to the character.
-#[inline]
 pub fn satisfy<'a, F>(predicate: F, description: &'a str) -> Satisfy<'a, F> {
     Satisfy(predicate, description)
 }
@@ -908,7 +895,6 @@ pub fn satisfy<'a, F>(predicate: F, description: &'a str) -> Satisfy<'a, F> {
 ///
 /// let letter = satisfy(char::is_alphabetic, "a-Z");
 /// ```
-#[inline]
 pub fn letter<'a>() -> Satisfy<'a, fn(char) -> bool> {
     satisfy(char::is_alphabetic, "a-Z")
 }
@@ -920,7 +906,6 @@ pub fn letter<'a>() -> Satisfy<'a, fn(char) -> bool> {
 ///
 /// let digit = satisfy(|c: char| c.is_digit(10), "0-9");
 /// ```
-#[inline]
 pub fn digit<'a>() -> Satisfy<'a, fn(char) -> bool> {
     satisfy(|c: char| c.is_digit(10), "0-9")
 }
@@ -932,7 +917,6 @@ pub fn digit<'a>() -> Satisfy<'a, fn(char) -> bool> {
 ///
 /// assert!(word().parse("9fAh4#~!").is_ok());
 /// ```
-#[inline]
 pub fn word<'a>() -> impl Parser<'a> {
     many::<_, String>(satisfy(|c: char| !c.is_whitespace(), "<word>")).label("<word>")
 }
@@ -944,7 +928,6 @@ pub fn word<'a>() -> impl Parser<'a> {
 ///
 /// let whitespace = satisfy(char::is_whitespace, " ");
 /// ```
-#[inline]
 pub fn whitespace<'a>() -> Satisfy<'a, fn(char) -> bool> {
     satisfy(char::is_whitespace, " ")
 }
@@ -957,7 +940,6 @@ pub fn whitespace<'a>() -> Satisfy<'a, fn(char) -> bool> {
 /// let (_, leftover) = linefeed().parse("\n").unwrap();
 /// assert!(leftover.is_empty());
 /// ```
-#[inline]
 pub fn linefeed<'a>() -> impl Parser<'a, Output = String> {
     satisfy(|c| c == '\n', r"\n")
         .map(|_| String::new())
@@ -974,7 +956,6 @@ pub fn linefeed<'a>() -> impl Parser<'a, Output = String> {
 ///
 /// assert_eq!(parser.parse("?").err(), Some(Error::new("only `!` is allowed")));
 /// ```
-#[inline]
 pub fn fail<'a, O>(msg: &'a str) -> Fail<'a, O> {
     Fail(msg, PhantomData)
 }
