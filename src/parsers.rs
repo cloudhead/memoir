@@ -316,11 +316,8 @@ where
 
 /// Parses if the predicate returns `true` on the input's next `char`.
 #[derive(Clone)]
-pub struct Satisfy<'a, F>(F, &'a str);
-impl<'a, F> Parser<'a> for Satisfy<'a, F>
-where
-    F: Fn(char) -> bool,
-{
+pub struct Satisfy<'a>(fn(char) -> bool, &'a str);
+impl<'a> Parser<'a> for Satisfy<'a> {
     type Output = char;
 
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
@@ -337,10 +334,7 @@ where
     }
 }
 
-impl<'a, F> std::fmt::Debug for Satisfy<'a, F>
-where
-    F: Fn(char) -> bool,
-{
+impl<'a> std::fmt::Debug for Satisfy<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Satisfy({})", self.describe())
     }
@@ -734,7 +728,7 @@ pub fn peek<'a, P: Parser<'a>>(parser: P) -> Peek<P> {
 }
 
 /// Parses any character. Always succeeds.
-pub fn character<'a>() -> Satisfy<'a, fn(char) -> bool> {
+pub fn character<'a>() -> Satisfy<'a> {
     satisfy(|_| true, "*")
 }
 
@@ -884,7 +878,7 @@ where
 
 /// Call the given predicate on the next character. If it returns `true`,
 /// consume to the character.
-pub fn satisfy<'a, F>(predicate: F, description: &'a str) -> Satisfy<'a, F> {
+pub fn satisfy<'a>(predicate: fn(char) -> bool, description: &'a str) -> Satisfy<'a> {
     Satisfy(predicate, description)
 }
 
@@ -895,7 +889,7 @@ pub fn satisfy<'a, F>(predicate: F, description: &'a str) -> Satisfy<'a, F> {
 ///
 /// let letter = satisfy(char::is_alphabetic, "a-Z");
 /// ```
-pub fn letter<'a>() -> Satisfy<'a, fn(char) -> bool> {
+pub fn letter<'a>() -> Satisfy<'a> {
     satisfy(char::is_alphabetic, "a-Z")
 }
 
@@ -906,7 +900,7 @@ pub fn letter<'a>() -> Satisfy<'a, fn(char) -> bool> {
 ///
 /// let digit = satisfy(|c: char| c.is_digit(10), "0-9");
 /// ```
-pub fn digit<'a>() -> Satisfy<'a, fn(char) -> bool> {
+pub fn digit<'a>() -> Satisfy<'a> {
     satisfy(|c: char| c.is_digit(10), "0-9")
 }
 
@@ -928,7 +922,7 @@ pub fn word<'a>() -> impl Parser<'a> {
 ///
 /// let whitespace = satisfy(char::is_whitespace, " ");
 /// ```
-pub fn whitespace<'a>() -> Satisfy<'a, fn(char) -> bool> {
+pub fn whitespace<'a>() -> Satisfy<'a> {
     satisfy(char::is_whitespace, " ")
 }
 
