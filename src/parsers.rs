@@ -102,7 +102,7 @@ pub trait Parser<'a> {
     ///
     /// assert_eq!(p.parse("X"), Ok((('X', 'X'), "")));
     /// ```
-    fn map<F, O>(self, f: F) -> Map<Self, F, O>
+    fn map<O>(self, f: fn(Self::Output) -> O) -> Map<'a, Self, O>
     where
         Self: Sized,
     {
@@ -177,11 +177,10 @@ where
 
 /// A parser with a mapped output.
 #[derive(Clone)]
-pub struct Map<P, F, O>(P, F, PhantomData<O>);
-impl<'a, P, F, O> Parser<'a> for Map<P, F, O>
+pub struct Map<'a, P: Parser<'a>, O>(P, fn(P::Output) -> O, PhantomData<O>);
+impl<'a, P, O> Parser<'a> for Map<'a, P, O>
 where
     P: Parser<'a>,
-    F: Fn(P::Output) -> O,
 {
     type Output = O;
 
@@ -194,10 +193,9 @@ where
     }
 }
 
-impl<'a, P, F, O> std::fmt::Debug for Map<P, F, O>
+impl<'a, P, O> std::fmt::Debug for Map<'a, P, O>
 where
     P: Parser<'a> + std::fmt::Debug,
-    F: Fn(P::Output) -> O,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Map({:?})", self.0)
