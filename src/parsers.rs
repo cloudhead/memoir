@@ -151,20 +151,20 @@ pub trait Parser<'a> {
 /// A parser that converts its output from a string.
 #[derive(Copy, Clone)]
 pub struct FromStr<P, O>(P, PhantomData<O>);
-impl<'a, P, O, S> Parser<'a> for FromStr<P, O>
+impl<'a, P, O, S, E> Parser<'a> for FromStr<P, O>
 where
     P: Parser<'a, Output = S>,
     S: AsRef<str>,
-    O: str::FromStr,
+    O: str::FromStr<Err = E>,
+    E: std::fmt::Display,
 {
     type Output = O;
 
     fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
         match self.0.parse(input) {
-            Ok((out, rest)) => match O::from_str(out.as_ref()) {
+            Ok((out, rest)) => match out.as_ref().parse::<O>() {
                 Ok(o) => Ok((o, rest)),
-                // TODO: Improve error message.
-                Err(_) => Err(Error::new(format!("conversion from string failed"))),
+                Err(e) => Err(Error::new(format!("conversion from string failed: {}", e))),
             },
             Err(err) => Err(err),
         }
@@ -728,6 +728,74 @@ pub fn peek<'a, P: Parser<'a>>(parser: P) -> Peek<P> {
 /// Parses any character. Always succeeds.
 pub fn character<'a>() -> Satisfy<'a> {
     satisfy(|_| true, "*")
+}
+
+/// Natural number.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let p = natural::<u64>();
+///
+/// assert!(p.parse("0").is_ok());
+/// assert!(p.parse("123").is_ok());
+/// assert!(p.parse("043").is_ok());
+/// assert!(p.parse("-55").is_err());
+/// ```
+pub fn natural<'a, O: std::str::FromStr<Err = std::num::ParseIntError>>(
+) -> impl Parser<'a, Output = O> {
+    many::<_, String>(digit()).from_str::<O>()
+}
+
+/// Positive or negative integer.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let p = integer::<i64>();
+///
+/// assert!(p.parse("0").is_ok());
+/// assert!(p.parse("123").is_ok());
+/// assert!(p.parse("043").is_ok());
+/// assert!(p.parse("-55").is_ok());
+/// ```
+pub fn integer<'a, O: std::str::FromStr<Err = std::num::ParseIntError>>(
+) -> impl Parser<'a, Output = O> {
+    optional('-')
+        .then(many::<_, String>(digit()))
+        .map(|(neg, num)| match neg {
+            Some(_) => format!("-{}", num),
+            None => num,
+        })
+        .from_str::<O>()
+}
+
+/// Rational number.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let p = rational::<f64>();
+///
+/// assert!(p.parse("0").is_ok());
+/// assert!(p.parse("123.456").is_ok());
+/// assert!(p.parse("-1.944").is_ok());
+/// assert!(p.parse("42").is_ok());
+///
+/// assert_eq!(p.parse(".42"), Ok((0.42, "")));
+/// assert_eq!(p.parse("-.42"), Ok((-0.42, "")));
+/// assert_eq!(p.parse("42."), Ok((42., "")));
+/// assert_eq!(p.parse("42-"), Ok((42., "-")));
+/// ```
+pub fn rational<'a, O: std::str::FromStr<Err = std::num::ParseFloatError>>(
+) -> impl Parser<'a, Output = O> {
+    optional('-')
+        .then(many::<_, String>(digit().or('.')))
+        .map(|(neg, num)| match neg {
+            Some(_) => format!("-{}", num),
+            None => num,
+        })
+        .from_str::<O>()
 }
 
 /// Applies the parser one or more times.
