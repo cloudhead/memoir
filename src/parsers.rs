@@ -3,6 +3,7 @@
 use std::fmt;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
+use std::num::{ParseFloatError, ParseIntError};
 use std::result;
 use std::str;
 
@@ -742,8 +743,7 @@ pub fn character<'a>() -> Satisfy<'a> {
 /// assert!(p.parse("043").is_ok());
 /// assert!(p.parse("-55").is_err());
 /// ```
-pub fn natural<'a, O: std::str::FromStr<Err = std::num::ParseIntError>>(
-) -> impl Parser<'a, Output = O> {
+pub fn natural<'a, O: str::FromStr<Err = ParseIntError>>() -> impl Parser<'a, Output = O> {
     many::<_, String>(digit()).from_str::<O>()
 }
 
@@ -759,8 +759,7 @@ pub fn natural<'a, O: std::str::FromStr<Err = std::num::ParseIntError>>(
 /// assert!(p.parse("043").is_ok());
 /// assert!(p.parse("-55").is_ok());
 /// ```
-pub fn integer<'a, O: std::str::FromStr<Err = std::num::ParseIntError>>(
-) -> impl Parser<'a, Output = O> {
+pub fn integer<'a, O: str::FromStr<Err = ParseIntError>>() -> impl Parser<'a, Output = O> {
     optional('-')
         .then(many::<_, String>(digit()))
         .map(|(neg, num)| match neg {
@@ -787,8 +786,7 @@ pub fn integer<'a, O: std::str::FromStr<Err = std::num::ParseIntError>>(
 /// assert_eq!(p.parse("42."), Ok((42., "")));
 /// assert_eq!(p.parse("42-"), Ok((42., "-")));
 /// ```
-pub fn rational<'a, O: std::str::FromStr<Err = std::num::ParseFloatError>>(
-) -> impl Parser<'a, Output = O> {
+pub fn rational<'a, O: str::FromStr<Err = ParseFloatError>>() -> impl Parser<'a, Output = O> {
     optional('-')
         .then(many::<_, String>(digit().or('.')))
         .map(|(neg, num)| match neg {
