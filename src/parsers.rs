@@ -597,6 +597,50 @@ where
     }
 }
 
+/// Tries to match the input with each parser in turn. Like `Choice`
+/// but allows alternatives of different types.
+pub struct Cases<'a, O>(Vec<Box<dyn Parser<'a, Output = O>>>);
+impl<'a, O> Parser<'a> for Cases<'a, O> {
+    type Output = O;
+
+    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
+        for p in self.0.iter() {
+            if let Ok(result) = p.parse(input) {
+                return Ok(result);
+            }
+        }
+        Err(self.describe_err(input))
+    }
+
+    fn describe(&self) -> String {
+        String::from("*")
+    }
+}
+
+/// Tries all alternatives.
+///
+/// ```
+/// use memoir::prelude::*;
+///
+/// let p = cases::<bool>(vec![
+///     case(string("fnord").map(|_| true)),
+///     case(symbol('!').map(|_| true)),
+///     case(many::<_, String>(digit()).from_str::<u32>().map(|_| true)),
+/// ]);
+///
+/// assert!(p.parse("fnord").is_ok());
+/// assert!(p.parse("!").is_ok());
+/// assert!(p.parse("13419").is_ok());
+/// ```
+pub fn cases<'a, O>(cases: Vec<Box<dyn Parser<'a, Output = O>>>) -> Cases<'a, O> {
+    Cases(cases)
+}
+
+/// Turn a parser into a case. Use with the `cases` function.
+pub fn case<'a, P: 'static + Parser<'a>>(p: P) -> Box<dyn Parser<'a, Output = P::Output>> {
+    Box::new(p)
+}
+
 /// Tries to parse a single character.
 #[derive(Clone, Debug)]
 pub struct Symbol(char);
