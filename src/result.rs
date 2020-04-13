@@ -56,4 +56,3 @@ impl fmt::Display for Error {
         self.msg.fmt(f)
     }
 }
-

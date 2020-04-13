@@ -274,7 +274,7 @@ pub fn fail<S: Into<String>, U>(err: S) -> Parser<U> {
 
 /// Call the given predicate on the next character. If it returns `true`,
 /// consume the character.
-pub fn satisfy<'a, F, S>(predicate: F, label: S) -> Parser<char>
+pub fn satisfy<F, S>(predicate: F, label: S) -> Parser<char>
 where
     F: 'static + Fn(char) -> bool,
     S: Into<String>,
@@ -515,7 +515,7 @@ pub fn string(s: &'static str) -> Parser<String> {
 /// assert!(p.parse("").is_err());
 /// ```
 pub fn whitespace() -> Parser<String> {
-    many::<_, String>(satisfy(|c| char::is_whitespace(c), "<whitespace>"))
+    many::<_, String>(satisfy(char::is_whitespace, "<whitespace>"))
         .label("<whitespace>")
         .from_str::<String, _>()
 }
@@ -556,7 +556,7 @@ pub fn digit() -> Parser<char> {
 /// assert!(p.parse("043").is_ok());
 /// assert!(p.parse("-55").is_err());
 /// ```
-pub fn natural<'a, O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
+pub fn natural<O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
     many::<_, String>(digit()).from_str::<O, _>()
 }
 
@@ -572,7 +572,7 @@ pub fn natural<'a, O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
 /// assert!(p.parse("043").is_ok());
 /// assert!(p.parse("-55").is_ok());
 /// ```
-pub fn integer<'a, O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
+pub fn integer<O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
     optional(symbol('-'))
         .then(many::<_, String>(digit()))
         .map(|(neg, num)| match neg {
@@ -599,7 +599,7 @@ pub fn integer<'a, O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
 /// assert_eq!(p.parse("42."), Ok((42., "")));
 /// assert_eq!(p.parse("42-"), Ok((42., "-")));
 /// ```
-pub fn rational<'a, O: std::str::FromStr<Err = ParseFloatError>>() -> Parser<O> {
+pub fn rational<O: std::str::FromStr<Err = ParseFloatError>>() -> Parser<O> {
     optional(symbol('-'))
         .then(many::<_, String>(digit().or(symbol('.'))))
         .map(|(neg, num)| match neg {
@@ -611,7 +611,7 @@ pub fn rational<'a, O: std::str::FromStr<Err = ParseFloatError>>() -> Parser<O> 
 
 /// Applies the first parser, and if it fails, applies the second one.
 /// Outputs an `Either` on success.
-pub fn either<'a, U, V>(left: Parser<U>, right: Parser<V>) -> Parser<Either<U, V>>
+pub fn either<U, V>(left: Parser<U>, right: Parser<V>) -> Parser<Either<U, V>>
 where
     U: 'static,
     V: 'static,
