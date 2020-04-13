@@ -1,6 +1,9 @@
-//! Parser errors.
+//! Parser result types.
 
 use std::fmt;
+
+/// Result of applying a `Parser` to an input.
+pub type Result<'a, T> = std::result::Result<(T, &'a str), Error>;
 
 /// A parser error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +28,19 @@ impl Error {
             cause: Some(Box::new(cause)),
         }
     }
+
+    /// Create an error based on an actual and expected.
+    pub fn expect(expected: &str, actual: &str) -> Error {
+        let (actual, overflow) = if actual.len() > 8 {
+            (&actual[..8], "..")
+        } else {
+            (actual, "")
+        };
+        Self::new(format!(
+            "expected {}, got `{}{}`",
+            expected, actual, overflow
+        ))
+    }
 }
 
 impl std::error::Error for Error {}
@@ -40,3 +56,4 @@ impl fmt::Display for Error {
         self.msg.fmt(f)
     }
 }
+

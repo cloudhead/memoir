@@ -1,13 +1,11 @@
-//! Core parser types. Import to construct new parsers.
+//! Core parser types.
 
 use std::fmt;
 use std::iter::FromIterator;
-use std::marker::PhantomData;
 use std::num::{ParseFloatError, ParseIntError};
-use std::result;
-use std::str;
+use std::rc::Rc;
 
-use crate::error::Error;
+use crate::result::{Error, Result};
 
 /// Either left or right. Used for parsers that can return
 /// either of two types of output.
@@ -19,47 +17,81 @@ pub enum Either<L, R> {
     Right(R),
 }
 
-/// Result of applying a `Parser` to an input.
-pub type Result<'a, T> = result::Result<(T, &'a str), Error>;
-
 /// A self-describing parser combinator.
-pub trait Parser<'a> {
-    /// The output of the parser, in case of success.
-    type Output;
+#[derive(Clone)]
+pub struct Parser<O: 'static> {
+    /// The label or description of this parser.
+    pub label: String,
 
-    /// Parse an input string and return a result. On success, returns an output, and any leftover
-    /// input. Otherwise, returns an error.
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output>;
+    parse: Rc<dyn for<'a> Fn(&'a str) -> Result<'a, O>>,
+}
 
-    /// Describe this parser as a string.
-    fn describe(&self) -> String;
-
-    /// Describe this parser when it fails.
-    fn describe_err(&self, input: &'a str) -> Error {
-        let input = if input.len() > 8 { &input[..8] } else { input };
-        Error::new(format!("expected `{}`, got `{}..`", self.describe(), input))
+impl<O> Parser<O> {
+    /// Create a new parser from a function and a label.
+    pub fn new<F, S>(f: F, label: S) -> Self
+    where
+        F: 'static + Fn(&str) -> Result<O>,
+        S: Into<String>,
+    {
+        Parser {
+            parse: Rc::new(f),
+            label: label.into(),
+        }
     }
 
     /// Sequence this parser with the next one.
     ///
     /// ```
-    /// use memoir::prelude::*;
+    /// use memoir::*;
     ///
     /// let p = string("moo").then(symbol('!')).then(symbol('?'));
-    /// assert_eq!(p.describe(), "moo!?");
+    /// assert_eq!(p.label, "\"moo\" '!' '?'");
     /// ```
-    fn then<P: Parser<'a>>(self, next: P) -> (Self, P)
-    where
-        Self: Sized,
-    {
-        (self, next)
+    pub fn then<U: 'static>(self, next: Parser<U>) -> Parser<(O, U)> {
+        let label = format!("{} {}", self.label, next.label);
+
+        Parser::new(
+            move |input: &str| {
+                (*self.parse)(input).and_then(|(out0, rest)| {
+                    (*next.parse)(rest).map(|(out1, rest)| ((out0, out1), rest))
+                })
+            },
+            label,
+        )
+    }
+
+    /// If this parser fails, try another one.
+    ///
+    /// ```
+    /// use memoir::*;
+    ///
+    /// let p = symbol('!').or(symbol('?'));
+    ///
+    /// assert_eq!(p.parse("?"), Ok(('?', "")));
+    /// ```
+    pub fn or(self, other: Parser<O>) -> Parser<O> {
+        let label = format!("{} | {}", self.label, other.label);
+
+        Parser::new(
+            move |input| {
+                if let Ok((out, rest)) = (*self.parse)(input) {
+                    Ok((out, rest))
+                } else {
+                    match (*other.parse)(input) {
+                        Ok((out, rest)) => Ok((out, rest)),
+                        Err(err) => Err(err),
+                    }
+                }
+            },
+            label,
+        )
     }
 
     /// Apply this parser, then try to apply the other parser.
     /// Only the output from this parser is returned.
     ///
     /// ```
-    /// use memoir::prelude::*;
+    /// use memoir::*;
     ///
     /// let p = symbol('X').skip(symbol('Y')).then(symbol('Z'));
     ///
@@ -71,714 +103,451 @@ pub trait Parser<'a> {
     /// assert_eq!(p.parse("XYZ"), Ok((('X', 'Z'), "")));
     /// assert_eq!(p.parse("XZ"), Ok((('X', 'Z'), "")));
     /// ```
-    fn skip<P: Parser<'a>>(self, skip: P) -> Skip<Self, P>
+    pub fn skip<U>(self, skip: Parser<U>) -> Parser<O>
     where
         Self: Sized,
     {
-        Skip(self, skip)
-    }
+        let label = self.label.clone();
 
-    /// If this parser fails, try another one.
-    ///
-    /// ```
-    /// use memoir::prelude::*;
-    ///
-    /// let p = symbol('!').or(symbol('?'));
-    ///
-    /// assert_eq!(p.parse("?"), Ok(('?', "")));
-    /// ```
-    fn or<P: Parser<'a>>(self, other: P) -> Alternative<Self, P>
-    where
-        Self: Sized,
-    {
-        Alternative(self, other)
+        Parser::new(
+            move |input| match (*self.parse)(input) {
+                Ok((out, rest)) => match (*skip.parse)(rest) {
+                    Ok((_, skipped)) => Ok((out, skipped)),
+                    Err(err) => Err(err),
+                },
+                Err(err) => Err(err),
+            },
+            label,
+        )
     }
 
     /// Modify the parser output if it succeeds, with the provided function.
     ///
     /// ```
-    /// use memoir::prelude::*;
+    /// use memoir::*;
     ///
     /// let p = symbol('X').map(|out| (out, out));
     ///
     /// assert_eq!(p.parse("X"), Ok((('X', 'X'), "")));
     /// ```
-    fn map<O>(self, f: fn(Self::Output) -> O) -> Map<'a, Self, O>
-    where
-        Self: Sized,
-    {
-        Map(self, f, PhantomData)
+    pub fn map<U: 'static>(self, f: fn(O) -> U) -> Parser<U> {
+        let label = self.label.clone();
+
+        Parser::new(
+            move |input| (*self.parse)(input).map(|(out, rest)| (f(out), rest)),
+            label,
+        )
     }
 
     /// Overwrite this parser's description with the given string.
     /// This is useful in particular when using one of the provideed parsers,
     /// and the built-in description is not adequate.
-    fn label(self, label: &'a str) -> Label<'a, Self>
-    where
-        Self: Sized,
-    {
-        Label(self, label)
+    pub fn label(self, l: impl Into<String>) -> Parser<O> {
+        Parser {
+            parse: self.parse,
+            label: l.into(),
+        }
     }
 
-    /// Provide a custom error message in case this parser fails.
-    /// This is useful for more complex parsers, or when the default
-    /// error is not adequate.
-    fn label_err(self, err: &'a str) -> LabelErr<'a, Self>
-    where
-        Self: Sized,
-    {
-        LabelErr(self, err)
+    /// Parse an input string and return a result. On success, returns an output, and any leftover
+    /// input. Otherwise, returns an error.
+    pub fn parse<'a>(&self, input: &'a str) -> Result<'a, O> {
+        (*self.parse)(input)
     }
 
     /// Try to convert the output of the parser from a string to the specified type.
     ///
     /// ```
-    /// use memoir::prelude::*;
+    /// use memoir::*;
     ///
-    /// let p = many::<_, String>(digit()).from_str::<u64>();
+    /// let p = many::<_, String>(digit()).from_str::<u64, _>();
     ///
     /// assert_eq!(p.parse("12345"), Ok((12345, "")));
     /// assert!(p.parse("abcde").is_err());
     ///
     /// ```
-    fn from_str<O>(self) -> FromStr<Self, O>
+    pub fn from_str<U, E>(self) -> Parser<U>
     where
-        Self: Sized,
+        O: AsRef<str>,
+        U: std::str::FromStr<Err = E>,
+        E: std::fmt::Display,
     {
-        FromStr(self, PhantomData)
-    }
-}
+        let label = self.label.clone();
 
-/// A parser that converts its output from a string.
-#[derive(Copy, Clone)]
-pub struct FromStr<P, O>(P, PhantomData<O>);
-impl<'a, P, O, S, E> Parser<'a> for FromStr<P, O>
-where
-    P: Parser<'a, Output = S>,
-    S: AsRef<str>,
-    O: str::FromStr<Err = E>,
-    E: std::fmt::Display,
-{
-    type Output = O;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        match self.0.parse(input) {
-            Ok((out, rest)) => match out.as_ref().parse::<O>() {
-                Ok(o) => Ok((o, rest)),
-                Err(e) => Err(Error::new(format!("conversion from string failed: {}", e))),
+        Parser::new(
+            move |input| match (*self.parse)(input) {
+                Ok((out, rest)) => match out.as_ref().parse::<U>() {
+                    Ok(o) => Ok((o, rest)),
+                    Err(e) => Err(Error::new(format!("conversion from string failed: {}", e))),
+                },
+                Err(err) => Err(err),
             },
-            Err(err) => Err(err),
-        }
+            label,
+        )
     }
 
-    fn describe(&self) -> String {
-        self.0.describe()
-    }
-}
+    /// Apply the parser until the other parser succeeds.
+    ///
+    /// ```
+    /// use memoir::*;
+    ///
+    /// let p = character().until::<String, _>(symbol('!'));
+    /// let (out, rest) = p.parse("Hello World!").unwrap();
+    ///
+    /// assert_eq!(out, String::from("Hello World"),);
+    /// assert_eq!(rest, "!");
+    /// ```
+    pub fn until<U, V>(self, other: Parser<V>) -> Parser<U>
+    where
+        U: FromIterator<O>,
+    {
+        let label = format!("(-{} {})*", other.label, self.label);
 
-/// A parser with a mapped output.
-#[derive(Clone)]
-pub struct Map<'a, P: Parser<'a>, O>(P, fn(P::Output) -> O, PhantomData<O>);
-impl<'a, P, O> Parser<'a> for Map<'a, P, O>
-where
-    P: Parser<'a>,
-{
-    type Output = O;
+        Parser::new(
+            move |input| {
+                let mut input = input;
+                let mut outs = Vec::new();
 
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        self.0.parse(input).map(|(out, rest)| (self.1(out), rest))
-    }
-
-    fn describe(&self) -> String {
-        self.0.describe()
-    }
-}
-
-impl<'a, P, O> std::fmt::Debug for Map<'a, P, O>
-where
-    P: Parser<'a> + std::fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Map({:?})", self.0)
-    }
-}
-
-/// A parser that always fails with a message. Useful to create custom
-/// error messages.
-#[derive(Clone, Debug)]
-pub struct Fail<'a, O>(&'a str, PhantomData<O>);
-impl<'a, O> Parser<'a> for Fail<'a, O> {
-    type Output = O;
-
-    fn parse(&self, _: &'a str) -> Result<'a, Self::Output> {
-        Err(Error::new(self.0))
-    }
-
-    fn describe(&self) -> String {
-        self.0.to_owned()
-    }
-}
-
-/// Turn a function into a parser.
-#[derive(Clone)]
-pub struct Apply<F>(F, String);
-impl<'a, F, O> Parser<'a> for Apply<F>
-where
-    F: Fn(&'a str) -> Result<'a, O>,
-{
-    type Output = O;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        self.0(input)
-    }
-
-    fn describe(&self) -> String {
-        self.1.clone()
-    }
-}
-
-impl<F> std::fmt::Debug for Apply<F> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Apply({})", self.1)
-    }
-}
-
-/// A transparent parser that overwrites that provides a description
-/// for the underlying parser.
-#[derive(Clone, Debug)]
-pub struct Label<'a, P>(P, &'a str);
-impl<'a, P> Parser<'a> for Label<'a, P>
-where
-    P: Parser<'a>,
-{
-    type Output = P::Output;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        self.0.parse(input)
-    }
-
-    fn describe(&self) -> String {
-        self.1.to_owned()
-    }
-}
-
-/// A transparent parser that just adds a label in case the parser fails.
-#[derive(Clone, Debug)]
-pub struct LabelErr<'a, P>(P, &'a str);
-impl<'a, P> Parser<'a> for LabelErr<'a, P>
-where
-    P: Parser<'a>,
-{
-    type Output = P::Output;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        self.0.parse(input).map_err(|e| Error::from(self.1, e))
-    }
-
-    fn describe(&self) -> String {
-        self.0.describe()
-    }
-}
-
-/// Tries to apply the underlying parser, and if it fails, returns
-/// an unmodified input.
-///
-/// Returns the output as an `Option`.
-#[derive(Clone, Debug)]
-pub struct Optional<P>(P);
-impl<'a, P> Parser<'a> for Optional<P>
-where
-    P: Parser<'a>,
-{
-    type Output = Option<P::Output>;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        match self.0.parse(input) {
-            Ok((out, rest)) => Ok((Some(out), rest)),
-            Err(_) => Ok((None, input)),
-        }
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<'a, P> fmt::Display for Optional<P>
-where
-    P: Parser<'a>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}]", self.0.describe())
-    }
-}
-
-/// Parses if the predicate returns `true` on the input's next `char`.
-#[derive(Clone)]
-pub struct Satisfy<'a>(fn(char) -> bool, &'a str);
-impl<'a> Parser<'a> for Satisfy<'a> {
-    type Output = char;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        let predicate = &self.0;
-
-        match input.chars().next() {
-            Some(c) if predicate(c) => Ok((c, input.get(c.len_utf8()..).unwrap_or_default())),
-            _ => Err(self.describe_err(input)),
-        }
-    }
-
-    fn describe(&self) -> String {
-        self.1.to_owned()
-    }
-}
-
-impl<'a> std::fmt::Debug for Satisfy<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Satisfy({})", self.describe())
-    }
-}
-
-/// Applies the underyling parser, but doesn't consume any input, even on success.
-#[derive(Clone, Debug)]
-pub struct Peek<P>(P);
-impl<'a, P> Parser<'a> for Peek<P>
-where
-    P: Parser<'a>,
-{
-    type Output = P::Output;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        match self.0.parse(input) {
-            Ok((out, _)) => Ok((out, input)),
-            Err(err) => Err(err),
-        }
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<'a, P> fmt::Display for Peek<P>
-where
-    P: Parser<'a>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(? {})", self.0.describe())
-    }
-}
-
-/// Applies the underlying parser zero or more times. Never fails.
-/// Returns the outputs as a vector.
-#[derive(Clone, Debug)]
-pub struct Any<P, O>(P, PhantomData<O>);
-impl<'a, P, O> Parser<'a> for Any<P, O>
-where
-    P: Parser<'a>,
-    O: FromIterator<P::Output>,
-{
-    type Output = O;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        let mut input = input;
-        let mut outs = Vec::new();
-
-        while let Ok((out, rest)) = self.0.parse(input) {
-            outs.push(out);
-            input = rest;
-        }
-        Ok((outs.into_iter().collect::<O>(), input))
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<'a, P, O> Any<P, O>
-where
-    P: Parser<'a>,
-{
-    /// Apply this parser until another parser succeeds.
-    pub fn until<Q: Parser<'a>>(self, other: Q) -> AnyUntil<P, Q, O> {
-        AnyUntil(self.0, other, PhantomData)
-    }
-}
-
-impl<'a, P, O> fmt::Display for Any<P, O>
-where
-    P: Parser<'a>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}]..", self.0.describe())
-    }
-}
-
-/// Applies the first parser zero or more times until the second parser succeeds.
-#[derive(Clone, Debug)]
-pub struct AnyUntil<P, Q, O>(P, Q, PhantomData<O>);
-impl<'a, P, Q, O> Parser<'a> for AnyUntil<P, Q, O>
-where
-    P: Parser<'a>,
-    Q: Parser<'a>,
-    O: FromIterator<P::Output>,
-{
-    type Output = O;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        let mut input = input;
-        let mut outs = Vec::new();
-
-        while self.1.parse(input).is_err() {
-            match self.0.parse(input) {
-                Ok((out, rest)) => {
-                    outs.push(out);
-                    input = rest;
+                while (*other.parse)(input).is_err() {
+                    match (*self.parse)(input) {
+                        Ok((out, rest)) => {
+                            outs.push(out);
+                            input = rest;
+                        }
+                        Err(err) => return Err(err),
+                    }
                 }
-                Err(err) => return Err(err),
-            }
-        }
-        Ok((outs.into_iter().collect::<O>(), input))
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<'a, P, Q, O> fmt::Display for AnyUntil<P, Q, O>
-where
-    P: Parser<'a>,
-    Q: Parser<'a>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}(?! {})", self.0.describe(), self.1.describe())
-    }
-}
-
-/// Applies the underlying parser at least once.
-/// Returns the outputs as a non-empty vector.
-#[derive(Clone, Debug)]
-pub struct Many<P, O>(P, PhantomData<O>);
-impl<'a, P, O, Q> Parser<'a> for Many<P, O>
-where
-    P: Parser<'a, Output = Q> + Clone,
-    O: FromIterator<Q>,
-{
-    type Output = O;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        self.0
-            .clone()
-            .then(any::<_, Vec<Q>>(self.0.clone()))
-            .parse(input)
-            .map(|((head, tail), rest)| {
-                (
-                    std::iter::once(head).chain(tail.into_iter()).collect::<O>(),
-                    rest,
-                )
-            })
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<'a, P, O> fmt::Display for Many<P, O>
-where
-    P: Parser<'a>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}..", self.0.describe())
-    }
-}
-
-/// Applies the first parser, then tries to apply the second parser.
-/// The outcome of the second parser is ignored. Only the output
-/// from the first parser is returned.
-#[derive(Clone, Debug)]
-pub struct Skip<P, Q>(P, Q);
-impl<'a, P, Q> Parser<'a> for Skip<P, Q>
-where
-    P: Parser<'a>,
-    Q: Parser<'a>,
-{
-    type Output = P::Output;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        match self.0.parse(input) {
-            Ok((out, rest)) => match self.1.parse(rest) {
-                Ok((_, skipped)) => Ok((out, skipped)),
-                Err(err) => Err(err),
+                Ok((outs.into_iter().collect::<U>(), input))
             },
-            Err(err) => Err(err),
-        }
-    }
-
-    fn describe(&self) -> String {
-        self.1.describe()
-    }
-}
-
-/// Tries to apply the first parser, and if it fails, applies
-/// the second one. On success, returns an `Either` with either
-/// the output of the first or second parser.
-#[derive(Clone, Debug)]
-pub struct Alternative<P, Q>(P, Q);
-impl<'a, P, Q, O> Parser<'a> for Alternative<P, Q>
-where
-    P: Parser<'a, Output = O>,
-    Q: Parser<'a, Output = O>,
-{
-    type Output = O;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        if let Ok((out, rest)) = self.0.parse(input) {
-            Ok((out, rest))
-        } else {
-            match self.1.parse(input) {
-                Ok((out, rest)) => Ok((out, rest)),
-                Err(err) => Err(err),
-            }
-        }
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<'a, P, Q> fmt::Display for Alternative<P, Q>
-where
-    P: Parser<'a>,
-    Q: Parser<'a>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.0.describe(), self.1.describe())
-    }
-}
-
-/// Applies the parsers in the underlying vector until one succeeds.
-#[derive(Clone, Debug)]
-pub struct Choice<P>(Vec<P>);
-impl<'a, P> Parser<'a> for Choice<P>
-where
-    P: Parser<'a>,
-{
-    type Output = P::Output;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        for p in self.0.iter() {
-            if let Ok(result) = p.parse(input) {
-                return Ok(result);
-            }
-        }
-        Err(self.describe_err(input))
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<'a, P> fmt::Display for Choice<P>
-where
-    P: Parser<'a>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0
-            .iter()
-            .map(|p| p.describe())
-            .collect::<Vec<_>>()
-            .join(" | ")
-            .fmt(f)
-    }
-}
-
-/// Tries to match the input with each parser in turn. Like `Choice`
-/// but allows alternatives of different types.
-pub struct Cases<'a, O>(Vec<Box<dyn Parser<'a, Output = O>>>);
-impl<'a, O> Parser<'a> for Cases<'a, O> {
-    type Output = O;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        for p in self.0.iter() {
-            if let Ok(result) = p.parse(input) {
-                return Ok(result);
-            }
-        }
-        Err(self.describe_err(input))
-    }
-
-    fn describe(&self) -> String {
-        String::from("*")
-    }
-}
-
-/// Tries all alternatives.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let p = cases::<bool>(vec![
-///     case(string("fnord").map(|_| true)),
-///     case(symbol('!').map(|_| true)),
-///     case(many::<_, String>(digit()).from_str::<u32>().map(|_| true)),
-/// ]);
-///
-/// assert!(p.parse("fnord").is_ok());
-/// assert!(p.parse("!").is_ok());
-/// assert!(p.parse("13419").is_ok());
-/// ```
-pub fn cases<'a, O>(cases: Vec<Box<dyn Parser<'a, Output = O>>>) -> Cases<'a, O> {
-    Cases(cases)
-}
-
-/// Turn a parser into a case. Use with the `cases` function.
-pub fn case<'a, P: 'static + Parser<'a>>(p: P) -> Box<dyn Parser<'a, Output = P::Output>> {
-    Box::new(p)
-}
-
-/// Tries to parse a single character.
-#[derive(Clone, Debug)]
-pub struct Symbol(char);
-impl<'a> Parser<'a> for Symbol {
-    type Output = char;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        match input.chars().next() {
-            Some(c) if c == self.0 => Ok((c, input.get(c.len_utf8()..).unwrap_or_default())),
-            _ => Err(self.describe_err(input)),
-        }
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl fmt::Display for Symbol {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-/// Parse a string literal.
-#[derive(Clone, Debug)]
-pub struct Keyword<O>(&'static str, PhantomData<O>);
-impl<'a, O> Parser<'a> for Keyword<O>
-where
-    O: str::FromStr,
-{
-    type Output = O;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        match input.get(..self.0.len()) {
-            Some(word) if word == self.0 => match O::from_str(self.0) {
-                Ok(out) => Ok((out, input.get(word.len()..).unwrap_or_default())),
-                Err(_) => Err(Error::new("couldn't convert keyword")),
-            },
-            _ => Err(self.describe_err(input)),
-        }
-    }
-
-    fn describe(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl<O> fmt::Display for Keyword<O> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-/// Applies the first parser and if it succeeds, the second.
-impl<'a, P, Q> Parser<'a> for (P, Q)
-where
-    P: Parser<'a>,
-    Q: Parser<'a>,
-{
-    type Output = (P::Output, Q::Output);
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        self.0
-            .parse(input)
-            .and_then(|(out0, rest)| self.1.parse(rest).map(|(out1, rest)| ((out0, out1), rest)))
-    }
-
-    fn describe(&self) -> String {
-        format!("{}{}", self.0.describe(), self.1.describe())
-    }
-}
-
-impl<'a, P, Q, R> Parser<'a> for (P, Q, R)
-where
-    P: Parser<'a>,
-    Q: Parser<'a>,
-    R: Parser<'a>,
-{
-    type Output = (P::Output, Q::Output, R::Output);
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        self.0.parse(input).and_then(|(out0, rest)| {
-            self.1.parse(rest).and_then(|(out1, rest)| {
-                self.2
-                    .parse(rest)
-                    .map(|(out2, rest)| ((out0, out1, out2), rest))
-            })
-        })
-    }
-
-    fn describe(&self) -> String {
-        format!(
-            "{}{}{}",
-            self.0.describe(),
-            self.1.describe(),
-            self.1.describe()
+            label,
         )
     }
 }
 
-/// Applies the parsers in the slice until one succeeds.
-pub fn choice<'a, P: Parser<'a> + Clone>(parsers: &[P]) -> Choice<P> {
-    Choice(parsers.to_vec())
+impl<O> fmt::Display for Parser<O> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.label)
+    }
+}
+
+impl From<char> for Parser<char> {
+    fn from(c: char) -> Self {
+        symbol(c)
+    }
+}
+
+impl From<&'static str> for Parser<String> {
+    fn from(s: &'static str) -> Self {
+        string(s)
+    }
+}
+
+/// Types that can be parsed from strings.
+pub trait Parse: Sized {
+    /// Parse a string into this type.
+    fn parse(input: &str) -> Result<Self>;
+
+    /// Describe this type.
+    fn label() -> &'static str;
+}
+
+/// Create a parser out of an instance of `Parse`.
+pub fn parser<O: Parse>() -> Parser<O> {
+    Parser::new(O::parse, O::label())
+}
+
+/// Fail with a message.
+///
+/// ```
+/// use memoir::*;
+/// use memoir::result::Error;
+///
+/// let parser = symbol('!').or(fail("only `!` is allowed"));
+///
+/// assert_eq!(parser.parse("?").err(), Some(Error::new("only `!` is allowed")));
+/// ```
+pub fn fail<S: Into<String>, U>(err: S) -> Parser<U> {
+    let err = err.into();
+
+    Parser::new(move |_| Err(Error::new(err.clone())), "<fail>")
+}
+
+/// Call the given predicate on the next character. If it returns `true`,
+/// consume the character.
+pub fn satisfy<'a, F, S>(predicate: F, label: S) -> Parser<char>
+where
+    F: 'static + Fn(char) -> bool,
+    S: Into<String>,
+{
+    Parser::new(
+        move |input: &str| match input.chars().next() {
+            Some(c) if predicate(c) => Ok((c, input.get(c.len_utf8()..).unwrap_or_default())),
+            _ => Err(Error::new("error")),
+        },
+        label.into(),
+    )
+}
+
+/// Apply *open*, then *between*, then *close*.
+///
+/// ```
+/// use memoir::*;
+///
+/// let parser = between(symbol('{'), symbol('}'), any::<_, String>(letter()));
+///
+/// assert!(parser.parse("{acme}").is_ok());
+/// assert_eq!(parser.parse("{acme}"), Ok(("acme".to_owned(), "")));
+/// ```
+pub fn between<U: 'static, V: 'static, O>(
+    open: impl Into<Parser<U>>,
+    close: impl Into<Parser<V>>,
+    between: Parser<O>,
+) -> Parser<O> {
+    open.into()
+        .then(between)
+        .then(close.into())
+        .map(|((_, body), _)| body)
+}
+
+/// Tries to apply the parser. If it fails, returns the unmodified input.
+/// Outputs an `Option` with `None` if it failed to apply the parser
+/// and `Some` if it succeeded.
+pub fn optional<O: 'static>(p: impl Into<Parser<O>>) -> Parser<Option<O>> {
+    let p = p.into();
+    let label = format!("{}?", p.label);
+
+    Parser::new(
+        move |input: &str| match (*p.parse)(input) {
+            Ok((out, rest)) => Ok((Some(out), rest)),
+            Err(_) => Ok((None, input)),
+        },
+        label,
+    )
+}
+
+/// Parses a single character.
+pub fn symbol(c: char) -> Parser<char> {
+    satisfy(move |input: char| input == c, format!("{:?}", c))
+}
+
+/// Parses a single letter.
+///
+/// ```
+/// use memoir::*;
+///
+/// let letter = satisfy(char::is_alphabetic, "a-Z");
+/// ```
+pub fn letter() -> Parser<char> {
+    satisfy(char::is_alphabetic, "a-Z")
+}
+
+/// Parses any character. Always succeeds.
+pub fn character() -> Parser<char> {
+    satisfy(|_| true, "<character>")
 }
 
 /// Applies the parser any number of times.
 ///
 /// ```
-/// use memoir::prelude::*;
+/// use memoir::*;
 ///
 /// let p = any(symbol('?'));
 ///
-/// assert_eq!(p.to_string(), "[?]..");
+/// assert_eq!(p.to_string(), "'?'*");
 /// assert_eq!(p.parse("???"), Ok((String::from("???"), "")));
 ///
 /// assert!(p.parse("").is_ok());
 /// assert!(p.parse("?").is_ok());
 /// assert!(p.parse("??????").is_ok());
 /// ```
-pub fn any<'a, P: Parser<'a>, O>(parser: P) -> Any<P, O> {
-    Any(parser, PhantomData)
+pub fn any<O, U>(p: Parser<O>) -> Parser<U>
+where
+    O: 'static,
+    U: 'static + FromIterator<O>,
+{
+    let label = format!("{}*", &p.label);
+
+    Parser::new(
+        move |input| {
+            let mut input = input;
+            let mut outs = Vec::new();
+
+            while let Ok((out, rest)) = (*p.parse)(input) {
+                outs.push(out);
+                input = rest;
+            }
+            Ok((outs.into_iter().collect::<U>(), input))
+        },
+        label,
+    )
 }
 
-/// Applies the parser, but doesn't consume any input, even on success.
-pub fn peek<'a, P: Parser<'a>>(parser: P) -> Peek<P> {
-    Peek(parser)
+/// Applies the parser one or more times.
+///
+/// ```
+/// use memoir::*;
+///
+/// let p = many::<_, String>(symbol('!'));
+///
+/// assert_eq!(p.to_string(), "'!'+");
+///
+/// assert!(p.parse("!").is_ok());
+/// assert!(p.parse("!!").is_ok());
+/// assert!(p.parse("!!!").is_ok());
+/// assert!(p.parse("").is_err());
+/// ```
+pub fn many<O, U>(p: Parser<O>) -> Parser<U>
+where
+    O: 'static,
+    U: 'static + FromIterator<O>,
+{
+    let label = format!("{}+", &p.label);
+
+    Parser::new(
+        move |input| {
+            let mut input = input;
+            let mut outs = Vec::new();
+
+            let (out, rest) = (*p.parse)(input)?;
+            outs.push(out);
+            input = rest;
+
+            while let Ok((out, rest)) = (*p.parse)(input) {
+                outs.push(out);
+                input = rest;
+            }
+            Ok((outs.into_iter().collect::<U>(), input))
+        },
+        label,
+    )
 }
 
-/// Parses any character. Always succeeds.
-pub fn character<'a>() -> Satisfy<'a> {
-    satisfy(|_| true, "*")
+/// Applies the parsers in the slice until one succeeds.
+///
+/// ```
+/// use memoir::*;
+///
+/// let p = choice(vec![symbol('?'), symbol('!'), symbol('.')]);
+///
+/// assert_eq!(p.to_string(), "'?' | '!' | '.'");
+///
+/// assert_eq!(p.parse("?").ok(), Some(('?', "")));
+/// assert_eq!(p.parse("!").ok(), Some(('!', "")));
+/// assert_eq!(p.parse(".").ok(), Some(('.', "")));
+///
+/// assert!(p.parse("@").is_err());
+/// assert!(p.parse(",").is_err());
+/// assert!(p.parse("").is_err());
+/// ```
+pub fn choice<O>(choices: Vec<Parser<O>>) -> Parser<O>
+where
+    O: 'static + Clone,
+{
+    let label = choices
+        .iter()
+        .map(|p| p.label.clone())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let expected = label.clone();
+
+    Parser::new(
+        move |input| {
+            for p in choices.iter() {
+                if let Ok(result) = (*p.parse)(input) {
+                    return Ok(result);
+                }
+            }
+            Err(Error::expect(&expected, input))
+        },
+        label,
+    )
+}
+
+/// Parses a string literal.
+///
+/// ```
+/// use memoir::*;
+/// use memoir::result::Error;
+///
+/// let p = keyword::<String>("set");
+///
+/// assert_eq!(p.to_string(), "\"set\"");
+///
+/// assert!(p.parse("set").is_ok());
+/// assert!(p.parse("").is_err());
+///
+/// assert_eq!(p.parse("get").err(), Some(Error::new("expected \"set\", got `get`")));
+///
+/// let p = keyword::<bool>("true");
+/// assert_eq!(p.parse("true!"), Ok((true, "!")));
+/// ```
+pub fn keyword<O: std::str::FromStr + 'static>(s: &'static str) -> Parser<O> {
+    let label = format!("{:?}", s);
+    let expected = label.clone();
+
+    Parser::new(
+        move |input| match input.get(..s.len()) {
+            Some(word) if word == s => match O::from_str(s) {
+                Ok(out) => Ok((out, input.get(word.len()..).unwrap_or_default())),
+                Err(_) => Err(Error::new("couldn't convert keyword")),
+            },
+            _ => Err(Error::expect(&expected, input)),
+        },
+        label,
+    )
+}
+
+/// Like `keyword`, but constrained to `String` outputs.
+pub fn string(s: &'static str) -> Parser<String> {
+    keyword::<String>(s)
+}
+
+/// Spaces.
+///
+/// ```
+/// use memoir::*;
+///
+/// let p = whitespace();
+///
+/// assert!(p.parse(" ").is_ok());
+/// assert!(p.parse("   ").is_ok());
+/// assert!(p.parse("\t \t").is_ok());
+/// assert!(p.parse("").is_err());
+/// ```
+pub fn whitespace() -> Parser<String> {
+    many::<_, String>(satisfy(|c| char::is_whitespace(c), "<whitespace>"))
+        .label("<whitespace>")
+        .from_str::<String, _>()
+}
+
+/// Parses a single line-feed token.
+///
+/// ```
+/// use memoir::*;
+///
+/// let p = linefeed();
+/// assert_eq!(p.parse("\n"), Ok((String::from("\n"), "")));
+/// assert_eq!(p.parse("\r\n"), Ok((String::from("\r\n"), "")));
+/// ```
+pub fn linefeed() -> Parser<String> {
+    symbol('\n').map(|_| String::from("\n")).or(string("\r\n"))
+}
+
+/// Parses a single base ten digit.
+///
+/// ```
+/// use memoir::*;
+///
+/// let digit = satisfy(|c: char| c.is_digit(10), "0-9");
+/// ```
+pub fn digit() -> Parser<char> {
+    satisfy(|c: char| c.is_digit(10), "0-9")
 }
 
 /// Natural number.
 ///
 /// ```
-/// use memoir::prelude::*;
+/// use memoir::*;
 ///
 /// let p = natural::<u64>();
 ///
@@ -787,14 +556,14 @@ pub fn character<'a>() -> Satisfy<'a> {
 /// assert!(p.parse("043").is_ok());
 /// assert!(p.parse("-55").is_err());
 /// ```
-pub fn natural<'a, O: str::FromStr<Err = ParseIntError>>() -> impl Parser<'a, Output = O> {
-    many::<_, String>(digit()).from_str::<O>()
+pub fn natural<'a, O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
+    many::<_, String>(digit()).from_str::<O, _>()
 }
 
 /// Positive or negative integer.
 ///
 /// ```
-/// use memoir::prelude::*;
+/// use memoir::*;
 ///
 /// let p = integer::<i64>();
 ///
@@ -803,20 +572,20 @@ pub fn natural<'a, O: str::FromStr<Err = ParseIntError>>() -> impl Parser<'a, Ou
 /// assert!(p.parse("043").is_ok());
 /// assert!(p.parse("-55").is_ok());
 /// ```
-pub fn integer<'a, O: str::FromStr<Err = ParseIntError>>() -> impl Parser<'a, Output = O> {
-    optional('-')
+pub fn integer<'a, O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
+    optional(symbol('-'))
         .then(many::<_, String>(digit()))
         .map(|(neg, num)| match neg {
             Some(_) => format!("-{}", num),
             None => num,
         })
-        .from_str::<O>()
+        .from_str::<O, _>()
 }
 
 /// Rational number.
 ///
 /// ```
-/// use memoir::prelude::*;
+/// use memoir::*;
 ///
 /// let p = rational::<f64>();
 ///
@@ -830,406 +599,36 @@ pub fn integer<'a, O: str::FromStr<Err = ParseIntError>>() -> impl Parser<'a, Ou
 /// assert_eq!(p.parse("42."), Ok((42., "")));
 /// assert_eq!(p.parse("42-"), Ok((42., "-")));
 /// ```
-pub fn rational<'a, O: str::FromStr<Err = ParseFloatError>>() -> impl Parser<'a, Output = O> {
-    optional('-')
-        .then(many::<_, String>(digit().or('.')))
+pub fn rational<'a, O: std::str::FromStr<Err = ParseFloatError>>() -> Parser<O> {
+    optional(symbol('-'))
+        .then(many::<_, String>(digit().or(symbol('.'))))
         .map(|(neg, num)| match neg {
             Some(_) => format!("-{}", num),
             None => num,
         })
-        .from_str::<O>()
-}
-
-/// Applies the parser one or more times.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let p = many::<_, String>(symbol('!'));
-///
-/// assert_eq!(p.to_string(), "!..");
-///
-/// assert!(p.parse("!").is_ok());
-/// assert!(p.parse("!!").is_ok());
-/// assert!(p.parse("!!!").is_ok());
-/// assert!(p.parse("").is_err());
-/// ```
-pub fn many<'a, P: Parser<'a>, O>(parser: P) -> Many<P, O> {
-    Many(parser, PhantomData)
-}
-
-/// Applies the parser at least once, separating subsequent applications
-/// with a separator.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let p = list(string("moo"), symbol('-'));
-///
-/// assert!(p.parse("moo-moo-moo").is_ok());
-/// assert!(p.parse("moo").is_ok());
-/// assert!(p.parse("foo").is_err());
-///
-/// let p = list(digit(), symbol(','));
-///
-/// assert_eq!(p.parse("1,2,3"), Ok((vec!['1', '2', '3'], "")));
-/// ```
-pub fn list<'a, P, Q, O>(parser: P, separator: Q) -> impl Parser<'a, Output = Vec<O>>
-where
-    P: Parser<'a, Output = O>,
-    Q: Parser<'a>,
-{
-    let parser_desc = parser.describe();
-    let separator_desc = separator.describe();
-
-    Apply(
-        move |input| match parser.parse(input) {
-            Ok((out, input)) => {
-                let mut outs: Vec<P::Output> = vec![out];
-                let mut i = input;
-
-                while let Ok((_, input)) = separator.parse(i) {
-                    match parser.parse(input) {
-                        Ok((out, input)) => {
-                            i = input;
-                            outs.push(out);
-                        }
-                        Err(err) => return Err(err),
-                    }
-                }
-                Ok((outs, i))
-            }
-            Err(err) => Err(err),
-        },
-        format!("{}[{}{}]..", parser_desc, separator_desc, parser_desc,),
-    )
-}
-
-/// Tries to apply the parser. If it fails, returns the unmodified input.
-/// Outputs an `Option` with `None` if it failed to apply the parser
-/// and `Some` if it succeeded.
-pub fn optional<'a, P: Parser<'a>>(parser: P) -> Optional<P> {
-    Optional(parser)
-}
-
-/// Parses a single character.
-pub fn symbol(sym: char) -> Symbol {
-    Symbol(sym)
-}
-
-/// Parses a string literal.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let p = keyword::<String>("set");
-///
-/// assert_eq!(p.to_string(), "set");
-///
-/// assert!(p.parse("set").is_ok());
-/// assert!(p.parse("get").is_err());
-/// assert!(p.parse("").is_err());
-///
-/// let p = keyword::<bool>("true");
-/// assert_eq!(p.parse("true!"), Ok((true, "!")));
-/// ```
-pub fn keyword<O>(kw: &'static str) -> Keyword<O> {
-    Keyword(kw, PhantomData)
-}
-
-/// Like `keyword`, but constrained to `String` outputs.
-pub fn string(s: &'static str) -> Keyword<String> {
-    keyword::<String>(s)
+        .from_str::<O, _>()
 }
 
 /// Applies the first parser, and if it fails, applies the second one.
 /// Outputs an `Either` on success.
-pub fn either<'a, P, Q>(left: P, right: Q) -> impl Parser<'a>
+pub fn either<'a, U, V>(left: Parser<U>, right: Parser<V>) -> Parser<Either<U, V>>
 where
-    P: Parser<'a>,
-    Q: Parser<'a>,
+    U: 'static,
+    V: 'static,
 {
-    let desc = format!("{}/{}", left.describe(), right.describe());
+    let label = format!("{} | {}", left.label, right.label);
 
-    Apply(
+    Parser::new(
         move |input| {
-            if let Ok((out, rest)) = left.parse(input) {
+            if let Ok((out, rest)) = (*left.parse)(input) {
                 Ok((Either::Left(out), rest))
             } else {
-                match right.parse(input) {
+                match (*right.parse)(input) {
                     Ok((out, rest)) => Ok((Either::Right(out), rest)),
                     Err(err) => Err(err),
                 }
             }
         },
-        desc,
+        label,
     )
-}
-
-/// Apply *open*, then *between*, then *close*.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let parser = between(symbol('{'), symbol('}'), any::<_, String>(letter()));
-///
-/// assert!(parser.parse("{acme}").is_ok());
-/// assert_eq!(parser.parse("{acme}"), Ok(("acme".to_owned(), "")));
-/// ```
-pub fn between<'a, P, Q, O>(open: P, close: P, between: Q) -> impl Parser<'a, Output = O>
-where
-    P: Parser<'a>,
-    Q: Parser<'a, Output = O>,
-{
-    open.then(between).then(close).map(|((_, body), _)| body)
-}
-
-/// Call the given predicate on the next character. If it returns `true`,
-/// consume to the character.
-pub fn satisfy<'a>(predicate: fn(char) -> bool, description: &'a str) -> Satisfy<'a> {
-    Satisfy(predicate, description)
-}
-
-/// Parses a single letter.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let letter = satisfy(char::is_alphabetic, "a-Z");
-/// ```
-pub fn letter<'a>() -> Satisfy<'a> {
-    satisfy(char::is_alphabetic, "a-Z")
-}
-
-/// Parses a single base ten digit.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let digit = satisfy(|c: char| c.is_digit(10), "0-9");
-/// ```
-pub fn digit<'a>() -> Satisfy<'a> {
-    satisfy(|c: char| c.is_digit(10), "0-9")
-}
-
-/// Parses a single word.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// assert!(word().parse("9fAh4#~!").is_ok());
-/// ```
-pub fn word<'a>() -> impl Parser<'a> {
-    many::<_, String>(satisfy(|c: char| !c.is_whitespace(), "<word>")).label("<word>")
-}
-
-/// Parses a single whitespace character.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let whitespace = satisfy(char::is_whitespace, " ");
-/// ```
-pub fn whitespace<'a>() -> Satisfy<'a> {
-    satisfy(char::is_whitespace, " ")
-}
-
-/// Parses a single line-feed token.
-///
-/// ```
-/// use memoir::prelude::*;
-///
-/// let (_, leftover) = linefeed().parse("\n").unwrap();
-/// assert!(leftover.is_empty());
-/// ```
-pub fn linefeed<'a>() -> impl Parser<'a, Output = String> {
-    satisfy(|c| c == '\n', r"\n")
-        .map(|_| String::new())
-        .or(string("\r\n"))
-}
-
-/// Fail with a message.
-///
-/// ```
-/// use memoir::prelude::*;
-/// use memoir::error::Error;
-///
-/// let parser = symbol('!').or(fail("only `!` is allowed"));
-///
-/// assert_eq!(parser.parse("?").err(), Some(Error::new("only `!` is allowed")));
-/// ```
-pub fn fail<'a, O>(msg: &'a str) -> Fail<'a, O> {
-    Fail(msg, PhantomData)
-}
-
-/// Create a parser out of a function.
-pub fn apply<'a, F, O>(f: F, description: &str) -> Apply<F>
-where
-    F: Fn(&'a str) -> Result<'a, O>,
-{
-    Apply(f, description.to_owned())
-}
-
-impl<'a> Parser<'a> for char {
-    type Output = Self;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        symbol(*self).parse(input)
-    }
-
-    fn describe(&self) -> String {
-        symbol(*self).describe()
-    }
-}
-
-impl<'a> Parser<'a> for &'static str {
-    type Output = String;
-
-    fn parse(&self, input: &'a str) -> Result<'a, Self::Output> {
-        string(self).parse(input)
-    }
-
-    fn describe(&self) -> String {
-        string(self).describe()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_optional() {
-        let p = Optional(Symbol('?'));
-
-        assert_eq!(p.to_string(), "[?]");
-
-        assert!(p.parse("?").is_ok());
-        assert!(p.parse("").is_ok());
-    }
-
-    #[test]
-    fn test_choice() {
-        let p = Choice(vec![Symbol('?'), Symbol('!'), Symbol('.')]);
-
-        assert_eq!(p.to_string(), "? | ! | .");
-
-        assert_eq!(p.parse("?").ok(), Some(('?', "")));
-        assert_eq!(p.parse("!").ok(), Some(('!', "")));
-        assert_eq!(p.parse(".").ok(), Some(('.', "")));
-
-        assert!(p.parse("@").is_err());
-        assert!(p.parse(",").is_err());
-        assert!(p.parse("").is_err());
-    }
-
-    #[test]
-    fn test_tuple1() {
-        let p = (
-            many::<_, String>(symbol('!')),
-            many::<_, String>(symbol('?')),
-        );
-
-        assert_eq!(p.describe(), "!..?..");
-        assert!(p.parse("!!!!???").is_ok());
-    }
-
-    #[test]
-    fn test_tuple2() {
-        let p = (
-            string("switch"),
-            (
-                symbol(' '),
-                (
-                    symbol('='),
-                    (symbol(' '), choice(&[string("on"), string("off")])),
-                ),
-            ),
-        );
-
-        assert_eq!(p.describe(), "switch = on | off");
-
-        assert!(p.parse("switch = on").is_ok());
-        assert!(p.parse("switch = off").is_ok());
-    }
-
-    #[test]
-    fn test_satisfy() {
-        let p = many::<_, String>(satisfy(char::is_alphabetic, "[a-Z]"));
-
-        assert_eq!(p.describe(), "[a-Z]..");
-
-        assert!(p.parse("abcdefg").is_ok());
-        assert!(p.parse("aBcDe").is_ok());
-        assert_eq!(
-            p.parse("1234").err(),
-            Some(Error::new("expected `[a-Z]`, got `1234..`"))
-        );
-    }
-
-    #[test]
-    fn test_label_err() {
-        let p = LabelErr(string("set"), "want `set`");
-
-        assert_eq!(p.describe(), "set");
-
-        assert!(p.parse("set").is_ok());
-        assert_eq!(p.parse("get").unwrap_err().to_string(), "want `set`");
-    }
-
-    #[test]
-    fn test_label() {
-        let p = Label(string("set"), "<set>");
-
-        assert_eq!(p.describe(), "<set>");
-        assert!(p.parse("set").is_ok());
-    }
-
-    #[test]
-    fn test_labels() {
-        let p1 = Label(LabelErr(string("set"), "want `set`"), "<set>");
-        let p2 = LabelErr(Label(string("set"), "<set>"), "want `set`");
-
-        assert_eq!(p1.describe(), "<set>");
-        assert!(p1.parse("set").is_ok());
-        assert_eq!(p1.parse("get").unwrap_err().to_string(), "want `set`");
-
-        assert_eq!(p2.describe(), "<set>");
-        assert!(p2.parse("set").is_ok());
-        assert_eq!(p2.parse("get").unwrap_err().to_string(), "want `set`");
-    }
-
-    #[test]
-    fn test_peek() {
-        let p = peek(symbol('!'));
-
-        assert_eq!(p.parse("!").unwrap().1, "!");
-        assert!(p.parse("?").is_err());
-    }
-
-    #[test]
-    fn test_any_until() {
-        let p = any::<_, String>(character()).until(symbol('!'));
-        let (out, rest) = p.parse("Hello World!").unwrap();
-
-        assert_eq!(out, String::from("Hello World"),);
-        assert_eq!(rest, "!");
-    }
-
-    #[test]
-    fn test_many() {
-        let p = many::<_, Vec<_>>(many::<_, String>(letter()).label("<word>"));
-        assert!(p.parse("moomoomoo").is_ok());
-    }
-
-    #[test]
-    fn test_comment() {
-        let p = symbol('#')
-            .skip(whitespace())
-            .then(any(character()).until(linefeed()));
-
-        let ((_, comment), out): ((_, String), _) = p.parse("# Greet user\n").unwrap();
-        assert_eq!(comment, "Greet user");
-        assert_eq!(out, "\n");
-    }
 }
