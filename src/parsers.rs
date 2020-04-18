@@ -129,7 +129,10 @@ impl<O> Parser<O> {
     ///
     /// assert_eq!(p.parse("X"), Ok((('X', 'X'), "")));
     /// ```
-    pub fn map<U: 'static>(self, f: fn(O) -> U) -> Parser<U> {
+    pub fn map<U: 'static, F>(self, f: F) -> Parser<U>
+    where
+        F: 'static + Fn(O) -> U,
+    {
         let label = self.label.clone();
 
         Parser::new(
