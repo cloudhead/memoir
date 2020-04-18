@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// Result of applying a `Parser` to an input.
-pub type Result<'a, T> = std::result::Result<(T, &'a str), Error>;
+pub type Result<'a, T> = std::result::Result<(T, &'a str), (Error, &'a str)>;
 
 /// A parser error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +31,10 @@ impl Error {
 
     /// Create an error based on an actual and expected.
     pub fn expect(expected: &str, actual: &str) -> Error {
+        if actual.is_empty() {
+            return Self::new(format!("expected {}, but reached end of input", expected));
+        }
+
         let (actual, overflow) = if actual.len() > 8 {
             (&actual[..8], "..")
         } else {

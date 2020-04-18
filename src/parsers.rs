@@ -60,7 +60,7 @@ impl<O> Parser<O> {
         )
     }
 
-    /// If this parser fails, try another one.
+    /// If this parser fails without any consuming input, try another one.
     ///
     /// ```
     /// use memoir::*;
@@ -73,15 +73,14 @@ impl<O> Parser<O> {
         let label = format!("{} | {}", self.label, other.label);
 
         Parser::new(
-            move |input| {
-                if let Ok((out, rest)) = (*self.parse)(input) {
-                    Ok((out, rest))
-                } else {
-                    match (*other.parse)(input) {
-                        Ok((out, rest)) => Ok((out, rest)),
-                        Err(err) => Err(err),
-                    }
-                }
+            move |input| match (*self.parse)(input) {
+                Ok(result) => Ok(result),
+                Err((err, rest)) if rest != input => Err((err, rest)),
+                Err((_err, _rest)) => match (*other.parse)(input) {
+                    Ok((out, rest)) => Ok((out, rest)),
+                    // TODO: Combine error messages.
+                    Err(err) => Err(err),
+                },
             },
             label,
         )
@@ -178,7 +177,10 @@ impl<O> Parser<O> {
             move |input| match (*self.parse)(input) {
                 Ok((out, rest)) => match out.as_ref().parse::<U>() {
                     Ok(o) => Ok((o, rest)),
-                    Err(e) => Err(Error::new(format!("conversion from string failed: {}", e))),
+                    Err(e) => Err((
+                        Error::new(format!("conversion from string failed: {}", e)),
+                        rest,
+                    )),
                 },
                 Err(err) => Err(err),
             },
@@ -264,12 +266,12 @@ pub fn parser<O: Parse>() -> Parser<O> {
 ///
 /// let parser = symbol('!').or(fail("only `!` is allowed"));
 ///
-/// assert_eq!(parser.parse("?").err(), Some(Error::new("only `!` is allowed")));
+/// assert_eq!(parser.parse("?").err(), Some((Error::new("only `!` is allowed"), "?")));
 /// ```
 pub fn fail<S: Into<String>, U>(err: S) -> Parser<U> {
     let err = err.into();
 
-    Parser::new(move |_| Err(Error::new(err.clone())), "<fail>")
+    Parser::new(move |input| Err((Error::new(err.clone()), input)), "<fail>")
 }
 
 /// Call the given predicate on the next character. If it returns `true`,
@@ -279,12 +281,15 @@ where
     F: 'static + Fn(char) -> bool,
     S: Into<String>,
 {
+    let label: String = label.into();
+    let expected = label.clone();
+
     Parser::new(
         move |input: &str| match input.chars().next() {
             Some(c) if predicate(c) => Ok((c, input.get(c.len_utf8()..).unwrap_or_default())),
-            _ => Err(Error::new("error")),
+            _ => Err((Error::expect(&expected, input), input)),
         },
-        label.into(),
+        label,
     )
 }
 
@@ -453,11 +458,13 @@ where
     Parser::new(
         move |input| {
             for p in choices.iter() {
-                if let Ok(result) = (*p.parse)(input) {
-                    return Ok(result);
+                match (*p.parse)(input) {
+                    Ok(result) => return Ok(result),
+                    Err((err, rest)) if rest != input => return Err((err, rest)),
+                    Err(_) => continue,
                 }
             }
-            Err(Error::expect(&expected, input))
+            Err((Error::expect(&expected, input), input))
         },
         label,
     )
@@ -476,7 +483,7 @@ where
 /// assert!(p.parse("set").is_ok());
 /// assert!(p.parse("").is_err());
 ///
-/// assert_eq!(p.parse("get").err(), Some(Error::new("expected \"set\", got `get`")));
+/// assert_eq!(p.parse("get").err(), Some((Error::new("expected \"set\", got `get`"), "get")));
 ///
 /// let p = keyword::<bool>("true");
 /// assert_eq!(p.parse("true!"), Ok((true, "!")));
@@ -489,9 +496,9 @@ pub fn keyword<O: std::str::FromStr + 'static>(s: &'static str) -> Parser<O> {
         move |input| match input.get(..s.len()) {
             Some(word) if word == s => match O::from_str(s) {
                 Ok(out) => Ok((out, input.get(word.len()..).unwrap_or_default())),
-                Err(_) => Err(Error::new("couldn't convert keyword")),
+                Err(_) => Err((Error::new("couldn't convert keyword"), input)),
             },
-            _ => Err(Error::expect(&expected, input)),
+            _ => Err((Error::expect(&expected, input), input)),
         },
         label,
     )
@@ -631,4 +638,65 @@ where
         },
         label,
     )
+}
+
+/// Apply the given parser, and if it fails, don't consume any input.
+///
+/// ```
+/// use memoir::*;
+///
+/// let p = choice(vec![
+///     peek(string("leave").skip(whitespace()).then(string("england"))),
+///     peek(string("leave").skip(whitespace()).then(string("france"))),
+/// ]);
+///
+/// assert!(p.parse("leave england").is_ok());
+/// assert!(p.parse("leave france").is_ok());
+/// ```
+pub fn peek<O>(p: Parser<O>) -> Parser<O> {
+    let label = p.label.clone();
+
+    Parser::new(
+        move |input| (*p.parse)(input).map_err(|(err, _)| (err, input)),
+        label,
+    )
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_choice_backtracking() {
+        let p = choice(vec![
+            string("leave").skip(whitespace()).then(string("england")),
+            string("learn").skip(whitespace()).then(string("english")),
+            string("leave").skip(whitespace()).then(string("britain")),
+        ]);
+
+        assert!(p.parse("learn english").is_ok());
+        assert!(p.parse("leave england").is_ok());
+        assert!(p.parse("leave britain").is_err());
+
+        let (err, rest) = p.parse("leave english").err().unwrap();
+        assert_eq!(rest, "english");
+        assert_eq!(err.to_string(), "expected \"england\", got `english`");
+    }
+
+    #[test]
+    fn test_or_backtracing() {
+        let p = string("leave")
+            .skip(whitespace())
+            .then(string("england"))
+            .or(string("learn").skip(whitespace()).then(string("english")))
+            .or(string("leave").skip(whitespace()).then(string("britain")));
+
+        assert!(p.parse("learn english").is_ok());
+        assert!(p.parse("leave england").is_ok());
+        assert!(p.parse("leave britain").is_err());
+
+        let (err, rest) = p.parse("leave english").err().unwrap();
+        assert_eq!(rest, "english");
+        assert_eq!(err.to_string(), "expected \"england\", got `english`");
+    }
 }
