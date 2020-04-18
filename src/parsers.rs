@@ -237,7 +237,8 @@ impl<O> Parser<O> {
         )
     }
 
-    /// Apply the parser until the other parser succeeds.
+    /// Apply the parser until the other parser succeeds, or the
+    /// end of the input is reached.
     ///
     /// ```
     /// use memoir::*;
@@ -259,7 +260,7 @@ impl<O> Parser<O> {
                 let mut input = input;
                 let mut outs = Vec::new();
 
-                while (*other.parse)(input).is_err() {
+                while (*other.parse)(input).is_err() && !input.is_empty() {
                     match (*self.parse)(input) {
                         Ok((out, rest)) => {
                             outs.push(out);
