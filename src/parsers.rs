@@ -141,6 +141,52 @@ impl<O> Parser<O> {
         )
     }
 
+    /// Modify the parser output if it succeeds, with the provided function
+    /// that can fail.
+    ///
+    /// ```
+    /// use memoir::*;
+    ///
+    /// let p = symbol('X').try_map::<String, _, _>(|out| Err(format!("failed to parse {}", out)));
+    ///
+    /// assert!(p.parse("X").is_err())
+    /// ```
+    pub fn try_map<'a, U: 'static, S, F>(self, f: F) -> Parser<U>
+    where
+        F: 'static + Fn(O) -> std::result::Result<U, S>,
+        S: Into<String>,
+    {
+        let label = self.label.clone();
+
+        Parser::new(
+            move |input| {
+                (*self.parse)(input).and_then(|(out, rest)| match f(out) {
+                    Ok(result) => Ok((result, rest)),
+                    Err(err) => Err((Error::new(err.into()), rest)),
+                })
+            },
+            label,
+        )
+    }
+
+    /// Modify the parser output if it succeeds, with the provided value.
+    ///
+    /// ```
+    /// use memoir::*;
+    ///
+    /// let p = symbol('X').value('Y');
+    ///
+    /// assert_eq!(p.parse("X"), Ok(('Y', "")));
+    /// ```
+    pub fn value<U: Clone + 'static>(self, val: U) -> Parser<U> {
+        let label = self.label.clone();
+
+        Parser::new(
+            move |input| (*self.parse)(input).map(|(_, rest)| (val.clone(), rest)),
+            label,
+        )
+    }
+
     /// Overwrite this parser's description with the given string.
     /// This is useful in particular when using one of the provideed parsers,
     /// and the built-in description is not adequate.
