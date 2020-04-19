@@ -793,6 +793,25 @@ mod test {
     }
 
     #[test]
+    fn test_choice_backtracking_skip() {
+        let p = choice(vec![
+            string("leave").skip(whitespace()).skip(string("england")),
+            string("leave/england"),
+        ]);
+
+        assert!(p.parse("leave england").is_ok());
+        assert!(p.parse("leave/england").is_err());
+
+        let p = choice(vec![
+            peek(string("leave").skip(whitespace())).skip(string("england")),
+            string("leave/england"),
+        ]);
+
+        assert!(p.parse("leave england").is_ok());
+        assert!(p.parse("leave/england").is_ok());
+    }
+
+    #[test]
     fn test_or_backtracing() {
         let p = string("leave")
             .skip(whitespace())
