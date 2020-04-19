@@ -579,6 +579,56 @@ where
     )
 }
 
+/// Applies all the given parsers and picks the one which consumes the most input.
+///
+/// ```
+/// use memoir::*;
+///
+/// let p = greediest(vec![string("he"), string("hello")]);
+///
+/// assert_eq!(p.parse("hello").ok(), Some(("hello".to_owned(), "")));
+/// assert_eq!(p.parse("he").ok(), Some(("he".to_owned(), "")));
+/// ```
+pub fn greediest<O>(choices: Vec<Parser<O>>) -> Parser<O>
+where
+    O: 'static + Clone,
+{
+    let label = choices
+        .iter()
+        .map(|p| p.label.clone())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let expected = label.clone();
+
+    Parser::new(
+        move |input| {
+            let mut greediest: Option<(O, &str)> = None;
+
+            for p in choices.iter() {
+                match (*p.parse)(input) {
+                    Ok((out, rest)) => match greediest {
+                        Some((_, greediest_rest)) if rest.len() < greediest_rest.len() => {
+                            greediest = Some((out, rest));
+                        }
+                        Some(_) => {}
+                        None => {
+                            greediest = Some((out, rest));
+                        }
+                    },
+                    Err((err, rest)) if rest != input => return Err((err, rest)),
+                    Err(_) => continue,
+                }
+            }
+            if let Some(result) = greediest {
+                Ok(result)
+            } else {
+                Err((Error::expect(&expected, input), input))
+            }
+        },
+        label,
+    )
+}
+
 /// Parses a string literal.
 ///
 /// ```
@@ -826,5 +876,24 @@ mod test {
         let (err, rest) = p.parse("leave english").err().unwrap();
         assert_eq!(rest, "english");
         assert_eq!(err.to_string(), "expected \"england\", got `english`");
+    }
+
+    #[test]
+    fn test_greediest() {
+        let p = greediest(vec![
+            natural::<u32>().value("<natural>"),
+            rational::<f32>().value("<rational>"),
+        ]);
+
+        assert_eq!(p.parse("42").ok(), Some(("<natural>", "")));
+        assert_eq!(p.parse("42.0").ok(), Some(("<rational>", "")));
+
+        let p = choice(vec![
+            natural::<u32>().value("<natural>"),
+            rational::<f32>().value("<rational>"),
+        ]);
+
+        assert_eq!(p.parse("42").ok(), Some(("<natural>", "")));
+        assert_eq!(p.parse("42.0").ok(), Some(("<natural>", ".0")));
     }
 }
