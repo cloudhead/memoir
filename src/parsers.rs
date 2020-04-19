@@ -60,6 +60,47 @@ impl<O> Parser<O> {
         )
     }
 
+    /// Fail this parser if the predicate fails.
+    ///
+    /// ```
+    /// use memoir::*;
+    ///
+    /// let p = string("moo").followed_by(|c| c == Some('.'));
+    /// assert_eq!(p.parse("moo."), Ok(("moo".to_owned(), ".")));
+    /// assert!(p.parse("moo").is_err());
+    /// ```
+    pub fn followed_by<F>(self, f: F) -> Parser<O>
+    where
+        F: 'static + Fn(Option<char>) -> bool,
+    {
+        let label = self.label.clone();
+
+        Parser::new(
+            move |input| match (*self.parse)(input) {
+                Ok((out, rest)) => {
+                    let c = rest.chars().next();
+
+                    if f(c) {
+                        Ok((out, rest))
+                    } else {
+                        Err((
+                            Error::new(format!(
+                                "expected {:?} not to be followed by {:?}",
+                                self.label,
+                                c.map(|c| c.to_string())
+                                    .as_deref()
+                                    .unwrap_or("<end of input>")
+                            )),
+                            rest,
+                        ))
+                    }
+                }
+                Err(err) => Err(err),
+            },
+            label,
+        )
+    }
+
     /// If this parser fails without any consuming input, try another one.
     ///
     /// ```
@@ -340,6 +381,24 @@ where
             _ => Err((Error::expect(&expected, input), input)),
         },
         label,
+    )
+}
+
+/// Call a function on the input, and if it returns `false`,
+/// throw an error.
+pub fn expect<F>(f: F, token: &'static str) -> Parser<()>
+where
+    F: 'static + Fn(&str) -> bool,
+{
+    Parser::new(
+        move |input| {
+            if !f(input) {
+                Err((Error::expect(token, input), input))
+            } else {
+                Ok(((), input))
+            }
+        },
+        token,
     )
 }
 
