@@ -269,44 +269,6 @@ impl<O> Parser<O> {
             label,
         )
     }
-
-    /// Apply the parser until the other parser succeeds, or the
-    /// end of the input is reached.
-    ///
-    /// ```
-    /// use memoir::*;
-    ///
-    /// let p = character().until::<String, _>(symbol('!'));
-    /// let (out, rest) = p.parse("Hello World!").unwrap();
-    ///
-    /// assert_eq!(out, String::from("Hello World"),);
-    /// assert_eq!(rest, "!");
-    /// ```
-    pub fn until<U, V>(self, other: Parser<V>) -> Parser<U>
-    where
-        U: FromIterator<O>,
-    {
-        let label = format!("(-{} {})*", other.label, self.label);
-
-        Parser::new(
-            move |input| {
-                let mut input = input;
-                let mut outs = Vec::new();
-
-                while (*other.parse)(input).is_err() && !input.is_empty() {
-                    match (*self.parse)(input) {
-                        Ok((out, rest)) => {
-                            outs.push(out);
-                            input = rest;
-                        }
-                        Err(err) => return Err(err),
-                    }
-                }
-                Ok((outs.into_iter().collect::<U>(), input))
-            },
-            label,
-        )
-    }
 }
 
 impl<O> fmt::Display for Parser<O> {
@@ -428,6 +390,71 @@ pub fn optional<O: 'static>(p: impl Into<Parser<O>>) -> Parser<Option<O>> {
             Err(_) => Ok((None, input)),
         },
         label,
+    )
+}
+
+/// Apply the parser until the other parser succeeds.
+///
+/// ```
+/// use memoir::*;
+///
+/// let p = until(symbol('!'));
+/// let (out, rest) = p.parse("Hello World!").unwrap();
+///
+/// assert_eq!(out, String::from("Hello World"),);
+/// assert_eq!(rest, "!");
+///
+/// assert!(p.parse("!").is_ok());
+/// assert!(p.parse("Hello World").is_err());
+/// ```
+pub fn until<V>(p: Parser<V>) -> Parser<String> {
+    let label = format!("(-{})*", p.label);
+
+    Parser::new(
+        move |mut input| {
+            let mut chars = input.chars();
+            let mut out = String::new();
+
+            loop {
+                if (*p.parse)(input).is_ok() {
+                    return Ok((out, input));
+                }
+
+                if let Some(c) = chars.next() {
+                    out.push(c);
+                    input = &input[c.len_utf8()..];
+                } else {
+                    break;
+                }
+            }
+            Err((Error::new("reached end of input"), input))
+        },
+        label,
+    )
+}
+
+/// Succeeds when the input is empty.
+///
+/// ```
+/// use memoir::{end, until};
+///
+/// end().parse("").is_ok();
+/// end().parse("#").is_err();
+///
+/// let (out, rest) = until(end()).parse("Hello World!").unwrap();
+/// assert_eq!(out, String::from("Hello World!"));
+/// assert_eq!(rest, "");
+/// ```
+pub fn end() -> Parser<()> {
+    Parser::new(
+        |input| {
+            if input.is_empty() {
+                Ok(((), input))
+            } else {
+                Err((Error::expect("end of input", input), input))
+            }
+        },
+        "<end>",
     )
 }
 
