@@ -599,6 +599,7 @@ where
 }
 
 /// Applies all the given parsers and picks the one which consumes the most input.
+/// Doesn't consume any input on partial failure.
 ///
 /// ```
 /// use memoir::*;
@@ -634,7 +635,6 @@ where
                             greediest = Some((out, rest));
                         }
                     },
-                    Err((err, rest)) if rest != input => return Err((err, rest)),
                     Err(_) => continue,
                 }
             }
