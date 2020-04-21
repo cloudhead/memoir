@@ -49,6 +49,12 @@ impl Error {
 
 impl std::error::Error for Error {}
 
+impl From<String> for Error {
+    fn from(input: String) -> Self {
+        Error::new(input)
+    }
+}
+
 impl From<&str> for Error {
     fn from(input: &str) -> Self {
         Error::new(input)

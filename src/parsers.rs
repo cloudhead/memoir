@@ -840,6 +840,11 @@ pub fn peek<O>(p: Parser<O>) -> Parser<O> {
     )
 }
 
+/// Silence a parser. Discard its output and return `()` instead.
+pub fn hush<O>(p: Parser<O>) -> Parser<()> {
+    p.value(())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -914,5 +919,21 @@ mod test {
 
         assert_eq!(p.parse("42").ok(), Some(("<natural>", "")));
         assert_eq!(p.parse("42.0").ok(), Some(("<natural>", ".0")));
+
+        let p = greediest(vec![
+            symbol('!').then(symbol('?')),
+            symbol('!').then(symbol('.')),
+        ]);
+
+        let (_, rest) = p.parse("!!").unwrap_err();
+        assert_eq!(rest, "!!", "doesn't consume any input on failure");
+
+        let p = choice(vec![
+            symbol('!').then(symbol('?')),
+            symbol('!').then(symbol('.')),
+        ]);
+
+        let (_, rest) = p.parse("!!").unwrap_err();
+        assert_eq!(rest, "!", "consumes input on failure");
     }
 }
