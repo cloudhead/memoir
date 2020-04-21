@@ -289,20 +289,6 @@ impl From<&'static str> for Parser<String> {
     }
 }
 
-/// Types that can be parsed from strings.
-pub trait Parse: Sized {
-    /// Parse a string into this type.
-    fn parse(input: &str) -> Result<Self>;
-
-    /// Describe this type.
-    fn label() -> &'static str;
-}
-
-/// Create a parser out of an instance of `Parse`.
-pub fn parser<O: Parse>() -> Parser<O> {
-    Parser::new(O::parse, O::label())
-}
-
 /// Fail with a message.
 ///
 /// ```

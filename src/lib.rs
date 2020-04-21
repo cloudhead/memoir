@@ -21,5 +21,6 @@
 pub mod ops;
 pub mod parsers;
 pub mod result;
+pub mod traits;
 
 pub use parsers::*;
