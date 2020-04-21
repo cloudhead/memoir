@@ -18,6 +18,7 @@
 //! assert_eq!(parser.label, r#""set" '!'? <whitespace> "on" | "off""#);
 //! assert!(parser.parse("set on").is_ok());
 //! ```
+pub mod ops;
 pub mod parsers;
 pub mod result;
 
