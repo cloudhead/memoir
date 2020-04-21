@@ -65,31 +65,23 @@ impl<O> Parser<O> {
     /// ```
     /// use memoir::*;
     ///
-    /// let p = string("moo").followed_by(|c| c == Some('.'));
+    /// let p = string("moo").followed_by(symbol('.'));
     /// assert_eq!(p.parse("moo."), Ok(("moo".to_owned(), ".")));
     /// assert!(p.parse("moo").is_err());
     /// ```
-    pub fn followed_by<F>(self, f: F) -> Parser<O>
-    where
-        F: 'static + Fn(Option<char>) -> bool,
-    {
+    pub fn followed_by<U>(self, p: Parser<U>) -> Parser<O> {
         let label = self.label.clone();
 
         Parser::new(
             move |input| match (*self.parse)(input) {
                 Ok((out, rest)) => {
-                    let c = rest.chars().next();
-
-                    if f(c) {
+                    if (*p.parse)(rest).is_ok() {
                         Ok((out, rest))
                     } else {
                         Err((
                             Error::new(format!(
-                                "expected {:?} not to be followed by {:?}",
-                                self.label,
-                                c.map(|c| c.to_string())
-                                    .as_deref()
-                                    .unwrap_or("<end of input>")
+                                "expected {:?} to be followed by {:?}, got {:?}",
+                                self.label, p.label, rest,
                             )),
                             rest,
                         ))
