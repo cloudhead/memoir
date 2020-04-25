@@ -15,7 +15,7 @@
 //!     .then(whitespace())
 //!     .then(either(string("on"), string("off")));
 //!
-//! assert_eq!(parser.label, r#""set" '!'? <whitespace> "on" | "off""#);
+//! assert_eq!(parser.label, r#""set" ['!'] <whitespace> "on" | "off""#);
 //! assert!(parser.parse("set on").is_ok());
 //! ```
 pub mod ops;

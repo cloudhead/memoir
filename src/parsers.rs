@@ -80,8 +80,8 @@ impl<O> Parser<O> {
                     } else {
                         Err((
                             Error::new(format!(
-                                "expected {:?} to be followed by {:?}, got {:?}",
-                                self.label, p.label, rest,
+                                "expected `{}` to be followed by {}, got `{}`",
+                                input, p.label, rest,
                             )),
                             rest,
                         ))
@@ -236,6 +236,23 @@ impl<O> Parser<O> {
         (*self.parse)(input)
     }
 
+    /// Expect the end of input.
+    pub fn end(self) -> Parser<O> {
+        self.skip(Parser::new(
+            |input| {
+                if !input.is_empty() {
+                    Err((
+                        format!("extraneous input found: {}", pretty(input)).into(),
+                        input,
+                    ))
+                } else {
+                    Ok(((), input))
+                }
+            },
+            "<end>",
+        ))
+    }
+
     /// Try to convert the output of the parser from a string to the specified type.
     ///
     /// ```
@@ -363,17 +380,18 @@ pub fn between<U: 'static, V: 'static, O>(
         .map(|((_, body), _)| body)
 }
 
-/// Tries to apply the parser. If it fails, returns the unmodified input.
-/// Outputs an `Option` with `None` if it failed to apply the parser
-/// and `Some` if it succeeded.
+/// Tries to apply the parser.  Outputs an `Option` with `None` if it failed to apply the parser
+/// and no input was consumed, and `Some` if it succeeded. Outputs an error if some but not all
+/// input was consumed.
 pub fn optional<O: 'static>(p: impl Into<Parser<O>>) -> Parser<Option<O>> {
     let p = p.into();
-    let label = format!("{}?", p.label);
+    let label = format!("[{}]", p.label);
 
     Parser::new(
         move |input: &str| match (*p.parse)(input) {
             Ok((out, rest)) => Ok((Some(out), rest)),
-            Err(_) => Ok((None, input)),
+            Err((_, rest)) if rest == input => Ok((None, input)),
+            Err(err) => Err(err),
         },
         label,
     )
@@ -829,6 +847,15 @@ pub fn peek<O>(p: Parser<O>) -> Parser<O> {
 /// Silence a parser. Discard its output and return `()` instead.
 pub fn hush<O>(p: Parser<O>) -> Parser<()> {
     p.value(())
+}
+
+/// Pretty print an input string.
+pub fn pretty(s: &str) -> String {
+    if s.chars().all(|c| c.is_whitespace()) {
+        format!("`{}`", s)
+    } else {
+        s.to_owned()
+    }
 }
 
 #[cfg(test)]

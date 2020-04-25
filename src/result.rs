@@ -35,8 +35,8 @@ impl Error {
             return Self::new(format!("expected {}, but reached end of input", expected));
         }
 
-        let (actual, overflow) = if actual.len() > 8 {
-            (&actual[..8], "..")
+        let (actual, overflow) = if actual.len() > 16 {
+            (&actual[..16], "..")
         } else {
             (actual, "")
         };
