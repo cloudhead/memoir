@@ -1,9 +1,9 @@
 //! Core parser types.
-
 use std::fmt;
 use std::iter::FromIterator;
 use std::num::{ParseFloatError, ParseIntError};
 use std::rc::Rc;
+use std::str::FromStr;
 
 use crate::result::{Error, Result};
 
@@ -184,7 +184,7 @@ impl<O> Parser<O> {
     ///
     /// assert!(p.parse("X").is_err())
     /// ```
-    pub fn try_map<'a, U: 'static, S, F>(self, f: F) -> Parser<U>
+    pub fn try_map<U: 'static, S, F>(self, f: F) -> Parser<U>
     where
         F: 'static + Fn(O) -> std::result::Result<U, S>,
         S: Into<String>,
@@ -267,7 +267,7 @@ impl<O> Parser<O> {
     pub fn from_str<U, E>(self) -> Parser<U>
     where
         O: AsRef<str>,
-        U: std::str::FromStr<Err = E>,
+        U: FromStr<Err = E>,
         E: std::fmt::Display,
     {
         let label = self.label.clone();
@@ -564,7 +564,7 @@ where
 /// ```
 /// use memoir::*;
 ///
-/// let p = choice(vec![symbol('?'), symbol('!'), symbol('.')]);
+/// let p = choice([symbol('?'), symbol('!'), symbol('.')]);
 ///
 /// assert_eq!(p.to_string(), "'?' | '!' | '.'");
 ///
@@ -576,11 +576,12 @@ where
 /// assert!(p.parse(",").is_err());
 /// assert!(p.parse("").is_err());
 /// ```
-pub fn choice<O>(choices: Vec<Parser<O>>) -> Parser<O>
+pub fn choice<O>(choices: impl AsRef<[Parser<O>]> + 'static) -> Parser<O>
 where
     O: 'static + Clone,
 {
     let label = choices
+        .as_ref()
         .iter()
         .map(|p| p.label.clone())
         .collect::<Vec<_>>()
@@ -589,7 +590,7 @@ where
 
     Parser::new(
         move |input| {
-            for p in choices.iter() {
+            for p in choices.as_ref().iter() {
                 match (*p.parse)(input) {
                     Ok(result) => return Ok(result),
                     Err((err, rest)) if rest != input => return Err((err, rest)),
@@ -608,16 +609,17 @@ where
 /// ```
 /// use memoir::*;
 ///
-/// let p = greediest(vec![string("he"), string("hello")]);
+/// let p = greediest([string("he"), string("hello")]);
 ///
 /// assert_eq!(p.parse("hello").ok(), Some(("hello".to_owned(), "")));
 /// assert_eq!(p.parse("he").ok(), Some(("he".to_owned(), "")));
 /// ```
-pub fn greediest<O>(choices: Vec<Parser<O>>) -> Parser<O>
+pub fn greediest<'a, O>(choices: impl AsRef<[Parser<O>]> + 'static) -> Parser<O>
 where
     O: 'static + Clone,
 {
     let label = choices
+        .as_ref()
         .iter()
         .map(|p| p.label.clone())
         .collect::<Vec<_>>()
@@ -628,7 +630,7 @@ where
         move |input| {
             let mut greediest: Option<(O, &str)> = None;
 
-            for p in choices.iter() {
+            for p in choices.as_ref().iter() {
                 match (*p.parse)(input) {
                     Ok((out, rest)) => match greediest {
                         Some((_, greediest_rest)) if rest.len() < greediest_rest.len() => {
@@ -670,7 +672,7 @@ where
 /// let p = keyword::<bool>("true");
 /// assert_eq!(p.parse("true!"), Ok((true, "!")));
 /// ```
-pub fn keyword<O: std::str::FromStr + 'static>(s: &'static str) -> Parser<O> {
+pub fn keyword<O: FromStr + 'static>(s: &'static str) -> Parser<O> {
     let label = format!("{:?}", s);
     let expected = label.clone();
 
@@ -745,7 +747,7 @@ pub fn digit() -> Parser<char> {
 /// assert!(p.parse("043").is_ok());
 /// assert!(p.parse("-55").is_err());
 /// ```
-pub fn natural<O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
+pub fn natural<O: FromStr<Err = ParseIntError>>() -> Parser<O> {
     many::<_, String>(digit()).from_str::<O, _>()
 }
 
@@ -761,7 +763,7 @@ pub fn natural<O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
 /// assert!(p.parse("043").is_ok());
 /// assert!(p.parse("-55").is_ok());
 /// ```
-pub fn integer<O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
+pub fn integer<O: FromStr<Err = ParseIntError>>() -> Parser<O> {
     optional(symbol('-'))
         .then(many::<_, String>(digit()))
         .map(|(neg, num)| match neg {
@@ -788,7 +790,7 @@ pub fn integer<O: std::str::FromStr<Err = ParseIntError>>() -> Parser<O> {
 /// assert_eq!(p.parse("42."), Ok((42., "")));
 /// assert_eq!(p.parse("42-"), Ok((42., "-")));
 /// ```
-pub fn rational<O: std::str::FromStr<Err = ParseFloatError>>() -> Parser<O> {
+pub fn rational<O: FromStr<Err = ParseFloatError>>() -> Parser<O> {
     optional(symbol('-'))
         .then(many::<_, String>(digit().or(symbol('.'))))
         .map(|(neg, num)| match neg {
@@ -827,7 +829,7 @@ where
 /// ```
 /// use memoir::*;
 ///
-/// let p = choice(vec![
+/// let p = choice([
 ///     peek(string("leave").skip(whitespace()).then(string("england"))),
 ///     peek(string("leave").skip(whitespace()).then(string("france"))),
 /// ]);
@@ -864,7 +866,7 @@ mod test {
 
     #[test]
     fn test_choice_backtracking() {
-        let p = choice(vec![
+        let p = choice([
             string("leave").skip(whitespace()).then(string("england")),
             string("learn").skip(whitespace()).then(string("english")),
             string("leave").skip(whitespace()).then(string("britain")),
@@ -881,7 +883,7 @@ mod test {
 
     #[test]
     fn test_choice_backtracking_skip() {
-        let p = choice(vec![
+        let p = choice([
             string("leave").skip(whitespace()).skip(string("england")),
             string("leave/england"),
         ]);
@@ -889,7 +891,7 @@ mod test {
         assert!(p.parse("leave england").is_ok());
         assert!(p.parse("leave/england").is_err());
 
-        let p = choice(vec![
+        let p = choice([
             peek(string("leave").skip(whitespace())).skip(string("england")),
             string("leave/england"),
         ]);
@@ -917,7 +919,7 @@ mod test {
 
     #[test]
     fn test_greediest() {
-        let p = greediest(vec![
+        let p = greediest([
             natural::<u32>().value("<natural>"),
             rational::<f32>().value("<rational>"),
         ]);
@@ -925,7 +927,7 @@ mod test {
         assert_eq!(p.parse("42").ok(), Some(("<natural>", "")));
         assert_eq!(p.parse("42.0").ok(), Some(("<rational>", "")));
 
-        let p = choice(vec![
+        let p = choice([
             natural::<u32>().value("<natural>"),
             rational::<f32>().value("<rational>"),
         ]);
@@ -933,18 +935,12 @@ mod test {
         assert_eq!(p.parse("42").ok(), Some(("<natural>", "")));
         assert_eq!(p.parse("42.0").ok(), Some(("<natural>", ".0")));
 
-        let p = greediest(vec![
-            symbol('!').then(symbol('?')),
-            symbol('!').then(symbol('.')),
-        ]);
+        let p = greediest([symbol('!').then(symbol('?')), symbol('!').then(symbol('.'))]);
 
         let (_, rest) = p.parse("!!").unwrap_err();
         assert_eq!(rest, "!!", "doesn't consume any input on failure");
 
-        let p = choice(vec![
-            symbol('!').then(symbol('?')),
-            symbol('!').then(symbol('.')),
-        ]);
+        let p = choice([symbol('!').then(symbol('?')), symbol('!').then(symbol('.'))]);
 
         let (_, rest) = p.parse("!!").unwrap_err();
         assert_eq!(rest, "!", "consumes input on failure");

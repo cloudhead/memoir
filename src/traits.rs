@@ -1,5 +1,4 @@
-//! Parser trait.
-
+//! Parser traits.
 use crate::parsers::Parser;
 use crate::result::*;
 
@@ -9,7 +8,7 @@ pub trait Parse: Sized + 'static {
     fn parser() -> Parser<Self>;
 
     /// Parse a string into this type.
-    fn parse(input: &str) -> Result<Self> {
+    fn parse(input: &str) -> Result<'_, Self> {
         Self::parser().parse(input)
     }
 }
